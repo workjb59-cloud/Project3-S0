@@ -288,9 +288,10 @@ def process_shop(shop_item: Dict) -> bool:
             s3_base_path=S3_BASE_PATH,
             category_path=S3_CATEGORY_PATH,
             aws_access_key=AWS_ACCESS_KEY,
-            aws_secret_key=AWS_SECRET_KEY
+            aws_secret_key=AWS_SECRET_KEY,
+            detail_pages_map=detail_pages_map
         )
-        print(f"Saved {len(ad_images_map)} ad images")
+        print(f"Saved images for {len(ad_images_map)} ads")
         
         # Prepare ads DataFrame with image paths and detail data
         ads_df = prepare_ad_data(yesterday_ads, shop_basic_info, ad_images_map, detail_pages_map)

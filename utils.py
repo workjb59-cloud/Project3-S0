@@ -566,7 +566,8 @@ def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict,
 def save_ad_images_to_s3(ads: List[Dict], shop_name: str, member_id: int,
                          bucket_name: str, s3_base_path: str, category_path: str,
                          aws_access_key: str, aws_secret_key: str,
-                         date: datetime = None) -> Dict[int, List[str]]:
+                         date: datetime = None,
+                         detail_pages_map: Optional[Dict[int, Dict]] = None) -> Dict[int, List[str]]:
     """
     Download and save ad images to S3
     
@@ -580,6 +581,7 @@ def save_ad_images_to_s3(ads: List[Dict], shop_name: str, member_id: int,
         aws_access_key: AWS access key
         aws_secret_key: AWS secret key
         date: Date for partitioning
+        detail_pages_map: Optional dict mapping ad_id to detail page data with media array
     
     Returns:
         Dictionary mapping ad_id to list of S3 image paths
@@ -606,46 +608,62 @@ def save_ad_images_to_s3(ads: List[Dict], shop_name: str, member_id: int,
         if not ad_id:
             continue
         
-        # Get image URI
-        image_uri = ad.get('image_uri')
-        if not image_uri:
+        # Get images from detail page media array if available, otherwise use listing image_uri
+        image_uris = []
+        
+        if detail_pages_map and ad_id in detail_pages_map:
+            detail = detail_pages_map[ad_id]
+            media_array = detail.get('media', [])
+            image_uris = [m.get('uri') for m in media_array if m.get('uri')]
+        
+        # Fallback to listing image_uri if no detail page data
+        if not image_uris:
+            image_uri = ad.get('image_uri')
+            if image_uri:
+                image_uris = [image_uri]
+        
+        if not image_uris:
             continue
         
-        # Download image
-        image_data = download_image(image_uri)
-        if not image_data:
-            continue
+        # Download all images for this ad
+        for idx, image_uri in enumerate(image_uris):
+            # Download image
+            image_data = download_image(image_uri)
+            if not image_data:
+                continue
+            
+            # Determine file extension
+            ext = 'webp'  # Default to webp as that's the common format
+            if '.png' in image_uri.lower():
+                ext = 'png'
+            elif '.jpg' in image_uri.lower() or '.jpeg' in image_uri.lower():
+                ext = 'jpg'
+            
+            # Generate S3 path for image
+            image_filename = f"ad_{ad_id}_img_{idx+1}.{ext}"
+            s3_image_key = f"{s3_base_path}/{category_path}/year={year}/month={month}/day={day}/images/{safe_shop_name}/{image_filename}"
+            
+            # Upload to S3
+            content_type = f"image/{ext}"
+            if ext == 'jpg':
+                content_type = 'image/jpeg'
+            
+            success = upload_image_to_s3(
+                image_data=image_data,
+                bucket_name=bucket_name,
+                s3_key=s3_image_key,
+                aws_access_key=aws_access_key,
+                aws_secret_key=aws_secret_key,
+                content_type=content_type
+            )
+            
+            if success:
+                if ad_id not in ad_images_map:
+                    ad_images_map[ad_id] = []
+                ad_images_map[ad_id].append(s3_image_key)
         
-        # Determine file extension from URI
-        ext = 'jpg'
-        if '.png' in image_uri.lower():
-            ext = 'png'
-        elif '.webp' in image_uri.lower():
-            ext = 'webp'
-        
-        # Generate S3 path for image
-        image_filename = f"ad_{ad_id}_main.{ext}"
-        s3_image_key = f"{s3_base_path}/{category_path}/year={year}/month={month}/day={day}/images/{safe_shop_name}/{image_filename}"
-        
-        # Upload to S3
-        content_type = f"image/{ext}"
-        if ext == 'jpg':
-            content_type = 'image/jpeg'
-        
-        success = upload_image_to_s3(
-            image_data=image_data,
-            bucket_name=bucket_name,
-            s3_key=s3_image_key,
-            aws_access_key=aws_access_key,
-            aws_secret_key=aws_secret_key,
-            content_type=content_type
-        )
-        
-        if success:
-            if ad_id not in ad_images_map:
-                ad_images_map[ad_id] = []
-            ad_images_map[ad_id].append(s3_image_key)
-            print(f"  ✓ Saved image for ad {ad_id}")
+        if ad_id in ad_images_map:
+            print(f"  ✓ Saved {len(ad_images_map[ad_id])} image(s) for ad {ad_id}")
     
     return ad_images_map
 
