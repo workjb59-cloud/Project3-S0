@@ -364,8 +364,16 @@ def update_incremental_info(existing_df: Optional[pd.DataFrame],
                     existing_df.loc[existing_mask, col] = new_row_df[col].values[0]
                 return existing_df
         
-        # Append new shop
-        return pd.concat([existing_df, new_row_df], ignore_index=True)
+        # Append new shop using _append (recommended way in newer pandas)
+        # Fill missing columns with None to avoid FutureWarning
+        for col in existing_df.columns:
+            if col not in new_row_df.columns:
+                new_row_df[col] = None
+        for col in new_row_df.columns:
+            if col not in existing_df.columns:
+                existing_df[col] = None
+        
+        return pd.concat([existing_df, new_row_df], ignore_index=True, sort=False)
     
     except Exception as e:
         print(f"Error updating incremental info: {e}")
