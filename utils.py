@@ -47,25 +47,48 @@ def extract_json_from_html(html_content: str, json_key: str) -> Optional[Dict]:
 
 def is_yesterday_ad(posted_at: str) -> bool:
     """
-    Check if an ad was posted yesterday
+    Check if an ad was posted in the last 24 hours (yesterday or today)
     
     Args:
-        posted_at: Posted date string in Arabic (e.g., "قبل ساعة", "قبل يوم")
+        posted_at: Posted date string in Arabic (e.g., "قبل ساعة", "أمس", "قبل يوم")
     
     Returns:
-        True if ad was posted yesterday
+        True if ad was posted in the last 24 hours
     """
     try:
-        # Check for "قبل يوم" (yesterday/1 day ago) or "قبل 24 ساعة" (24 hours ago)
+        # Check for "أمس" (yesterday)
+        if "أمس" in posted_at:
+            return True
+        
+        # Check for "يوم" or "أيام" (days)
         if "قبل يوم" in posted_at or "قبل 1 يوم" in posted_at:
             return True
         
-        # Check for hours - if 20-28 hours ago, consider it yesterday
+        # Check for "أيام" (multiple days) - if more than 1 day, reject
+        days_match = re.search(r'قبل (\d+) (يوم|أيام)', posted_at)
+        if days_match:
+            days = int(days_match.group(1))
+            # Only accept ads from yesterday (1 day ago)
+            return days == 1
+        
+        # Check for hours - accept any ads posted within 24 hours
         hour_match = re.search(r'قبل (\d+) ساع', posted_at)
         if hour_match:
             hours = int(hour_match.group(1))
-            if 20 <= hours <= 28:
-                return True
+            # Accept ads posted in last 24 hours
+            return hours <= 24
+        
+        # Check for single hour: "قبل ساعة" (1 hour ago)
+        if "قبل ساعة" in posted_at and "ساعتان" not in posted_at and "ساعات" not in posted_at:
+            return True
+        
+        # Check for "قبل ساعتان" (2 hours ago)
+        if "قبل ساعتان" in posted_at or "قبل ساعتين" in posted_at:
+            return True
+        
+        # Check for minutes - accept all recent ads (minutes ago)
+        if "دقيقة" in posted_at or "دقائق" in posted_at:
+            return True
         
         return False
     except Exception as e:
