@@ -199,45 +199,107 @@ def download_from_s3(bucket_name: str, s3_key: str,
 
 def prepare_shop_info_row(shop_data: Dict) -> Dict:
     """
-    Prepare shop info for the info.xlsx file
+    Prepare shop info for the info.xlsx file - extracts ALL available fields
     
     Args:
         shop_data: Shop data dictionary
     
     Returns:
-        Dictionary with shop info for Excel row
+        Dictionary with comprehensive shop info for Excel row
     """
     try:
         member = shop_data.get('info', {}).get('member', {})
         branding = member.get('branding', {})
         rating = member.get('rating', {})
         location = branding.get('location', {})
+        following = member.get('following', {})
+        share = branding.get('share', {})
         
-        return {
+        # Build comprehensive shop info dictionary
+        shop_info = {
+            # Basic info
             'member_id': member.get('id'),
             'shop_name': branding.get('name'),
+            'is_shop': member.get('is_shop'),
+            'has_membership': member.get('has_membership'),
+            
+            # Category
             'category_id': branding.get('category_id'),
             'category_name': branding.get('category_name'),
             'description': branding.get('description'),
+            
+            # Location
             'city_name': branding.get('city_name'),
+            'address': location.get('address'),
+            'has_location': location.get('has_location'),
+            'is_location_requested': location.get('is_location_requested'),
+            'latitude': location.get('lat'),
+            'longitude': location.get('long'),
+            
+            # Stats
             'posts_count': member.get('posts_count'),
             'views_count': member.get('views_count'),
             'response_time': member.get('response_time'),
             'member_since': member.get('member_since'),
+            
+            # Contact
             'mobile_number': member.get('mobile_number'),
-            'followers_count': member.get('following', {}).get('followers_count'),
-            'followings_count': member.get('following', {}).get('followings_count'),
+            'reveal_key': member.get('reveal_key'),
+            'call_anytime': branding.get('call_anytime'),
+            'enable_login_before_call': member.get('enable_login_before_call'),
+            
+            # Following/Social
+            'is_followed': following.get('is_followed'),
+            'followers_count': following.get('followers_count'),
+            'followings_count': following.get('followings_count'),
+            
+            # Rating
             'average_rating': rating.get('average_rating'),
             'number_of_rating': rating.get('number_of_rating'),
+            'number_of_reviews': rating.get('number_of_reviews'),
+            'buyer_to_seller_rate': rating.get('buyer_to_seller_rate'),
+            'enable_rating_form': rating.get('enable_rating_form'),
+            'show_rating_after_interaction': rating.get('show_rating_after_interaction'),
+            
+            # Rating stats
+            'n_star_1_percentage': rating.get('stats', {}).get('n_star_1_percentage'),
+            'n_star_2_percentage': rating.get('stats', {}).get('n_star_2_percentage'),
+            'n_star_3_percentage': rating.get('stats', {}).get('n_star_3_percentage'),
+            'n_star_4_percentage': rating.get('stats', {}).get('n_star_4_percentage'),
+            'n_star_5_percentage': rating.get('stats', {}).get('n_star_5_percentage'),
+            
+            # Media
             'avatar': branding.get('avatar'),
             'cover_photo': branding.get('cover_photo'),
-            'address': location.get('address'),
-            'latitude': location.get('lat'),
-            'longitude': location.get('long'),
+            
+            # Share links
+            'share_title': share.get('title'),
+            'share_link': share.get('link'),
+            'share_deeplink': share.get('share_deeplink'),
+            
+            # Verification & Status
             'authorised_seller': member.get('authorised_seller'),
             'verification_level': member.get('verification_level'),
+            'is_reported': member.get('is_reported'),
+            'show_reporting': member.get('show_reporting'),
+            'is_reels_enabled': member.get('is_reels_enabled'),
+            'show_sold_listings': member.get('show_sold_listings'),
+            
+            # Metadata
             'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
+        
+        # Add open hours if available
+        open_hours = branding.get('open_hours', [])
+        if open_hours:
+            # Store open hours as JSON string for each day
+            for hour in open_hours:
+                dow = hour.get('dow')
+                dow_label = hour.get('dow_label', f'day_{dow}')
+                shop_info[f'open_hours_{dow_label}'] = f"{hour.get('open_time')} - {hour.get('close_time')}"
+        
+        return shop_info
+        
     except Exception as e:
         print(f"Error preparing shop info: {e}")
         return {}
