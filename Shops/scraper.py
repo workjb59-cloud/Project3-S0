@@ -24,7 +24,8 @@ from utils import (
     prepare_ad_data,
     update_incremental_info,
     get_partitioned_s3_path,
-    save_ad_images_to_s3
+    save_ad_images_to_s3,
+    fetch_ad_detail_page
 )
 from Shops.config import (
     CATEGORY_URL,
@@ -32,6 +33,7 @@ from Shops.config import (
     S3_CATEGORY_PATH,
     DELAY_BETWEEN_SHOPS,
     DELAY_BETWEEN_PAGES,
+    DETAIL_PAGE_DELAY,
     MAX_RETRIES,
     REQUEST_TIMEOUT
 )
@@ -248,6 +250,34 @@ def process_shop(shop_item: Dict) -> bool:
             'shop_name': shop_name
         }
         
+        # Fetch detail pages for each ad
+        print(f"Fetching detail pages for {len(yesterday_ads)} ads...")
+        detail_pages_map = {}
+        for i, ad in enumerate(yesterday_ads, 1):
+            ad_id = ad.get('id')
+            ad_url = ad.get('post_url')
+            
+            if not ad_url:
+                continue
+            
+            # Add base URL if needed
+            if not ad_url.startswith('http'):
+                ad_url = f"https://kw.opensooq.com{ad_url}"
+            
+            print(f"  [{i}/{len(yesterday_ads)}] Fetching ad {ad_id}...")
+            detail_data = fetch_ad_detail_page(ad_url)
+            
+            if detail_data:
+                detail_pages_map[ad_id] = detail_data
+                print(f"    ✓ Got detail data")
+            else:
+                print(f"    ✗ Failed to get detail data")
+            
+            # Small delay to avoid overwhelming the server
+            time.sleep(DETAIL_PAGE_DELAY)
+        
+        print(f"Successfully fetched {len(detail_pages_map)}/{len(yesterday_ads)} detail pages")
+        
         # Download and save ad images to S3
         print(f"Downloading images for {len(yesterday_ads)} ads...")
         ad_images_map = save_ad_images_to_s3(
@@ -262,8 +292,8 @@ def process_shop(shop_item: Dict) -> bool:
         )
         print(f"Saved {len(ad_images_map)} ad images")
         
-        # Prepare ads DataFrame with image paths
-        ads_df = prepare_ad_data(yesterday_ads, shop_basic_info, ad_images_map)
+        # Prepare ads DataFrame with image paths and detail data
+        ads_df = prepare_ad_data(yesterday_ads, shop_basic_info, ad_images_map, detail_pages_map)
         
         if ads_df.empty:
             print(f"Failed to prepare ads data for: {shop_name}")

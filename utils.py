@@ -116,6 +116,68 @@ def filter_yesterday_ads(ads: List[Dict]) -> List[Dict]:
     return yesterday_ads
 
 
+def fetch_ad_detail_page(ad_url: str, timeout: int = 30) -> Optional[Dict]:
+    """
+    Fetch and parse individual ad detail page
+    
+    Args:
+        ad_url: Full URL to ad detail page (e.g., https://kw.opensooq.com/ar/search/275635211)
+        timeout: Request timeout in seconds
+    
+    Returns:
+        Parsed postData.listing object or None if failed
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
+        }
+        
+        response = requests.get(ad_url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        
+        # Extract JSON from HTML
+        page_props = extract_json_from_html(response.text, 'pageProps')
+        if not page_props:
+            return None
+        
+        # Get postData.listing
+        listing_data = page_props.get('postData', {}).get('listing', {})
+        return listing_data if listing_data else None
+    
+    except Exception as e:
+        print(f"Error fetching ad detail page {ad_url}: {e}")
+        return None
+
+
+def parse_basic_info(basic_info_array: List[Dict]) -> Dict:
+    """
+    Parse basic_info array from ad detail page into flat dictionary
+    
+    Args:
+        basic_info_array: List of basic info fields from ad detail
+    
+    Returns:
+        Dictionary with parsed fields
+    """
+    parsed = {}
+    
+    for item in basic_info_array:
+        field_label = item.get('field_label', '')
+        option_label = item.get('option_label', '')
+        data_type = item.get('data_type', '')
+        
+        # Handle multi-select fields like nearby_locations
+        if data_type == 'multi_cps' and 'options' in item:
+            options = [opt.get('option_label', '') for opt in item.get('options', [])]
+            parsed[field_label] = '; '.join(options)
+        else:
+            parsed[field_label] = option_label
+    
+    return parsed
+
+
 def download_image(image_url: str, timeout: int = 30) -> Optional[bytes]:
     """
     Download image from URL
@@ -377,14 +439,17 @@ def prepare_shop_info_row(shop_data: Dict) -> Dict:
         return {}
 
 
-def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict, ad_images_map: Optional[Dict[int, List[str]]] = None) -> pd.DataFrame:
+def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict, 
+                   ad_images_map: Optional[Dict[int, List[str]]] = None,
+                   detail_pages_map: Optional[Dict[int, Dict]] = None) -> pd.DataFrame:
     """
-    Prepare ads data for Excel export with basic shop info
+    Prepare ads data for Excel export with basic shop info and optional detail page data
     
     Args:
-        ads: List of ad dictionaries
+        ads: List of ad dictionaries from listings
         shop_basic_info: Basic shop info to include with each ad
         ad_images_map: Optional dict mapping ad_id to list of S3 image paths
+        detail_pages_map: Optional dict mapping ad_id to detail page data
     
     Returns:
         DataFrame with ads data
@@ -392,41 +457,103 @@ def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict, ad_images_map: Optio
     try:
         rows = []
         for ad in ads:
+            ad_id = ad.get('id')
+            
+            # Get detail page data if available
+            detail = detail_pages_map.get(ad_id, {}) if detail_pages_map else {}
+            
+            # Parse basic_info array if present
+            basic_info_parsed = {}
+            if detail and 'basic_info' in detail:
+                basic_info_parsed = parse_basic_info(detail.get('basic_info', []))
+            
+            # Get media array
+            media_uris = []
+            if detail and 'media' in detail:
+                media_uris = [m.get('uri', '') for m in detail.get('media', [])]
+            
             row = {
                 # Shop basic info
                 'shop_member_id': shop_basic_info.get('member_id'),
                 'shop_name': shop_basic_info.get('shop_name'),
                 
-                # Ad info
-                'ad_id': ad.get('id'),
-                'title': ad.get('title'),
-                'posted_at': ad.get('posted_at'),
-                'expired_at': ad.get('expired_at'),
-                'price_amount': ad.get('price_amount'),
-                'price_currency_iso': ad.get('price_currency_iso'),
+                # Ad basic info (from listing)
+                'ad_id': ad_id,
+                'title': detail.get('title') or ad.get('title'),
+                'masked_description': detail.get('masked_description') or ad.get('masked_description'),
+                'post_type': detail.get('post_type'),
+                'country_id': detail.get('country_id'),
+                
+                # Location info
                 'city_id': ad.get('city_id'),
                 'city_label': ad.get('city_label'),
+                'city_name_english': detail.get('city', {}).get('name_english') if detail else None,
                 'nhood_id': ad.get('nhood_id'),
                 'nhood_label': ad.get('nhood_label'),
+                'nhood_name_english': detail.get('neighborhood', {}).get('name_english') if detail else None,
+                'city_neighborhood': detail.get('city_neighborhood') if detail else None,
+                
+                # Category info
                 'cat1_code': ad.get('cat1_code'),
                 'cat1_label': ad.get('cat1_label'),
                 'cat2_code': ad.get('cat2_code'),
                 'cat2_label': ad.get('cat2_label'),
-                'image_uri': ad.get('image_uri'),
-                'image_count': ad.get('image_count'),
-                'has_video': ad.get('has_video'),
-                'has_360': ad.get('has_360'),
-                'highlights': ad.get('highlights'),
-                'masked_description': ad.get('masked_description'),
-                'post_url': ad.get('post_url'),
+                
+                # Dates
+                'posted_at': ad.get('posted_at'),
+                'posted_date': detail.get('posted_date') if detail else None,
+                'publish_date': detail.get('publish_date') if detail else None,
+                'expired_at': ad.get('expired_at'),
+                'price_valid_until': detail.get('price_valid_until') if detail else None,
+                
+                # Price info
+                'price_amount': detail.get('price_amount') or ad.get('price_amount'),
+                'price_currency_iso': ad.get('price_currency_iso'),
+                
+                # Contact & features
+                'masked_local_phone': detail.get('masked_local_phone') if detail else None,
                 'phone_number': ad.get('phone_number'),
+                'has_delivery_service': detail.get('has_delivery_service') if detail else None,
+                'has_video': detail.get('has_video') or ad.get('has_video'),
+                'has_360': detail.get('has_360') or ad.get('has_360'),
+                'has_youtube': detail.get('has_youtube') if detail else None,
+                
+                # Images
+                'image_uri': ad.get('image_uri'),
+                'first_image_uri': detail.get('first_image_uri') if detail else None,
+                'image_count': ad.get('image_count'),
+                'media_uris': '; '.join(media_uris) if media_uris else None,
+                
+                # URLs
+                'post_url': detail.get('post_url') or ad.get('post_url'),
+                'share_deeplink': detail.get('share_deeplink') if detail else None,
+                
+                # Status & ratings
+                'listing_status': detail.get('listing_status') or ad.get('listing_status'),
+                'is_active': detail.get('is_active') if detail else None,
+                'is_shop': detail.get('is_shop') if detail else None,
+                'user_target_type': detail.get('user_target_type') if detail else None,
                 'member_rating_avg': ad.get('member_rating_avg'),
                 'member_rating_count': ad.get('member_rating_count'),
                 'verification_level': ad.get('verification_level'),
-                'listing_status': ad.get('listing_status'),
-                'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                's3_image_path': '; '.join(ad_images_map.get(ad.get('id'), [])) if ad_images_map else None
+                
+                # Additional info
+                'highlights': ad.get('highlights'),
+                
+                # S3 paths
+                's3_image_path': '; '.join(ad_images_map.get(ad_id, [])) if ad_images_map else None,
+                
+                # Metadata
+                'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
+            
+            # Add parsed basic_info fields
+            for key, value in basic_info_parsed.items():
+                # Clean field name for Excel column
+                clean_key = re.sub(r'[^\w\s-]', '', key)
+                clean_key = re.sub(r'[-\s]+', '_', clean_key).strip('_')
+                row[clean_key] = value
+            
             rows.append(row)
         
         return pd.DataFrame(rows)

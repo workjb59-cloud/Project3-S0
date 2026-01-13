@@ -13,6 +13,7 @@ S3_CATEGORY_PATH = "shops"  # Will be used in: opensooq-data/{S3_CATEGORY_PATH}/
 # Scraping settings
 DELAY_BETWEEN_SHOPS = 3  # seconds
 DELAY_BETWEEN_PAGES = 2  # seconds
+DETAIL_PAGE_DELAY = 1  # seconds between fetching ad detail pages
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = 30
 
