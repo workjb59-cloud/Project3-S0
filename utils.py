@@ -121,20 +121,22 @@ def download_image(image_url: str, timeout: int = 30) -> Optional[bytes]:
     Download image from URL
     
     Args:
-        image_url: URL of the image
+        image_url: URL of the image (can be full URL or just the hash path)
         timeout: Request timeout in seconds
     
     Returns:
         Image bytes or None if failed
     """
     try:
-        # Add https if not present
+        # Construct full URL if not already complete
         if not image_url.startswith('http'):
-            image_url = f"https://opensooq-images.os-cdn.com/{image_url}"
+            # Try with previews path first (common format)
+            image_url = f"https://opensooq-images.os-cdn.com/previews/2048x0/{image_url}.webp"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Referer': 'https://kw.opensooq.com/'
         }
         
         response = requests.get(image_url, headers=headers, timeout=timeout)
