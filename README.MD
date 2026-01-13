@@ -37,9 +37,16 @@ opensooq-data/
 │   ├── year=2026/
 │   │   ├── month=01/
 │   │   │   ├── day=13/
-│   │   │   │   ├── شركة_دار_الشويخ_العقارية.xlsx
-│   │   │   │   ├── UNLIMITED_TEC.xlsx
-│   │   │   │   └── ...
+│   │   │   │   ├── excel files/
+│   │   │   │   │   ├── شركة_دار_الشويخ_العقارية.xlsx
+│   │   │   │   │   ├── UNLIMITED_TEC.xlsx
+│   │   │   │   │   └── ...
+│   │   │   │   └── images/
+│   │   │   │       ├── شركة_دار_الشويخ_العقارية/
+│   │   │   │       │   ├── ad_275635211_main.jpg
+│   │   │   │       │   └── ...
+│   │   │   │       └── UNLIMITED_TEC/
+│   │   │   │           └── ...
 │   │   │   ├── day=14/
 │   │   │   │   └── ...
 │   │   └── month=02/
@@ -179,16 +186,25 @@ You can also trigger the workflow manually from the **Actions** tab in GitHub.
 
 1. **Fetch Shops List**: Scrapes all pages of the shops listing
 2. **Parse HTML**: Uses BeautifulSoup to extract JSON data from `__NEXT_DATA__` script tag
-3. **Filter Yesterday's Ads**: Checks `posted_at` field for "قبل يوم" or "قبل 24 ساعة"
-4. **Save to S3**:
-   - Ad data → `opensooq-data/shops/year=YYYY/month=MM/day=DD/{shop_name}.xlsx` (partitioned)
+3. **Filter Yesterday's Ads**: Checks `posted_at` field for "أمس", "قبل يوم", or hours/minutes
+4. **Download Images**: Downloads ad images from opensooq CDN
+5. **Save to S3**:
+   - Ad data → `opensooq-data/shops/year=YYYY/month=MM/day=DD/excel files/{shop_name}.xlsx`
+   - Ad images → `opensooq-data/shops/year=YYYY/month=MM/day=DD/images/{shop_name}/ad_{id}_main.jpg`
    - Shop info → `opensooq-data/info/info.xlsx` (incremental)
-5. **Rate Limi (Shared utilities)
+6. **Rate Limiting**: 2-3 second delays between requests
+
+## 🛠️ Key Functions
+
+### `utils.py` (Shared utilities)
 
 - `extract_json_from_html()` - Extract JSON from Next.js HTML
 - `is_yesterday_ad()` - Check if ad was posted yesterday
 - `filter_yesterday_ads()` - Filter ads list
 - `get_partitioned_s3_path()` - Generate Hive-style partitioned S3 paths
+- `download_image()` - Download image from URL
+- `upload_image_to_s3()` - Upload image bytes to S3
+- `save_ad_images_to_s3()` - Download and save all ad images
 - `upload_to_s3()` - Upload DataFrame to S3 as Excel
 - `download_from_s3()` - Download Excel from S3
 - `update_incremental_info()` - Update shop info incrementally

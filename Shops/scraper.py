@@ -23,7 +23,8 @@ from utils import (
     prepare_shop_info_row,
     prepare_ad_data,
     update_incremental_info,
-    get_partitioned_s3_path
+    get_partitioned_s3_path,
+    save_ad_images_to_s3
 )
 from Shops.config import (
     CATEGORY_URL,
@@ -254,8 +255,22 @@ def process_shop(shop_item: Dict) -> bool:
             print(f"Failed to prepare ads data for: {shop_name}")
             return False
         
+        # Download and save ad images to S3
+        print(f"Downloading images for {len(yesterday_ads)} ads...")
+        ad_images_map = save_ad_images_to_s3(
+            ads=yesterday_ads,
+            shop_name=shop_name,
+            member_id=member_id,
+            bucket_name=BUCKET_NAME,
+            s3_base_path=S3_BASE_PATH,
+            category_path=S3_CATEGORY_PATH,
+            aws_access_key=AWS_ACCESS_KEY,
+            aws_secret_key=AWS_SECRET_KEY
+        )
+        print(f"Saved {len(ad_images_map)} ad images")
+        
         # Upload ads to S3 with partitioned path
-        partitioned_path = get_partitioned_s3_path(member_id, shop_name)
+        partitioned_path = get_partitioned_s3_path(member_id, shop_name, folder='excel files')
         s3_ads_key = f"{S3_BASE_PATH}/{S3_CATEGORY_PATH}/{partitioned_path}"
         
         upload_success = upload_to_s3(

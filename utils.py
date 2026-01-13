@@ -3,12 +3,14 @@ Utility functions for opensooq.com scraper
 """
 import json
 import re
+import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup
 import boto3
 from io import BytesIO
 import pandas as pd
+import requests
 
 
 def extract_json_from_html(html_content: str, json_key: str) -> Optional[Dict]:
@@ -112,6 +114,74 @@ def filter_yesterday_ads(ads: List[Dict]) -> List[Dict]:
             yesterday_ads.append(ad)
     
     return yesterday_ads
+
+
+def download_image(image_url: str, timeout: int = 30) -> Optional[bytes]:
+    """
+    Download image from URL
+    
+    Args:
+        image_url: URL of the image
+        timeout: Request timeout in seconds
+    
+    Returns:
+        Image bytes or None if failed
+    """
+    try:
+        # Add https if not present
+        if not image_url.startswith('http'):
+            image_url = f"https://opensooq-images.os-cdn.com/{image_url}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8'
+        }
+        
+        response = requests.get(image_url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return response.content
+    
+    except Exception as e:
+        print(f"Error downloading image {image_url}: {e}")
+        return None
+
+
+def upload_image_to_s3(image_data: bytes, bucket_name: str, s3_key: str,
+                       aws_access_key: str, aws_secret_key: str,
+                       content_type: str = 'image/jpeg') -> bool:
+    """
+    Upload image bytes to S3
+    
+    Args:
+        image_data: Image bytes
+        bucket_name: S3 bucket name
+        s3_key: S3 object key (path)
+        aws_access_key: AWS access key
+        aws_secret_key: AWS secret key
+        content_type: Image content type
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key
+        )
+        
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=image_data,
+            ContentType=content_type
+        )
+        
+        return True
+    
+    except Exception as e:
+        print(f"Error uploading image to S3: {e}")
+        return False
 
 
 def upload_to_s3(data: pd.DataFrame, bucket_name: str, s3_key: str, 
@@ -362,10 +432,98 @@ def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_partitioned_s3_path(member_id: int, shop_name: str, date: datetime = None) -> str:
+def save_ad_images_to_s3(ads: List[Dict], shop_name: str, member_id: int,
+                         bucket_name: str, s3_base_path: str, category_path: str,
+                         aws_access_key: str, aws_secret_key: str,
+                         date: datetime = None) -> Dict[int, List[str]]:
+    """
+    Download and save ad images to S3
+    
+    Args:
+        ads: List of ad dictionaries
+        shop_name: Shop name
+        member_id: Shop member ID
+        bucket_name: S3 bucket name
+        s3_base_path: Base S3 path (e.g., "opensooq-data")
+        category_path: Category path (e.g., "shops")
+        aws_access_key: AWS access key
+        aws_secret_key: AWS secret key
+        date: Date for partitioning
+    
+    Returns:
+        Dictionary mapping ad_id to list of S3 image paths
+    """
+    if date is None:
+        date = datetime.now()
+    
+    year = date.strftime('%Y')
+    month = date.strftime('%m')
+    day = date.strftime('%d')
+    
+    # Clean shop name for folder
+    safe_shop_name = re.sub(r'[^\w\s-]', '', shop_name)
+    safe_shop_name = re.sub(r'[-\s]+', '_', safe_shop_name).strip('_')
+    if len(safe_shop_name) > 50:
+        safe_shop_name = safe_shop_name[:50]
+    if not safe_shop_name:
+        safe_shop_name = f"shop_{member_id}"
+    
+    ad_images_map = {}
+    
+    for ad in ads:
+        ad_id = ad.get('id')
+        if not ad_id:
+            continue
+        
+        # Get image URI
+        image_uri = ad.get('image_uri')
+        if not image_uri:
+            continue
+        
+        # Download image
+        image_data = download_image(image_uri)
+        if not image_data:
+            continue
+        
+        # Determine file extension from URI
+        ext = 'jpg'
+        if '.png' in image_uri.lower():
+            ext = 'png'
+        elif '.webp' in image_uri.lower():
+            ext = 'webp'
+        
+        # Generate S3 path for image
+        image_filename = f"ad_{ad_id}_main.{ext}"
+        s3_image_key = f"{s3_base_path}/{category_path}/year={year}/month={month}/day={day}/images/{safe_shop_name}/{image_filename}"
+        
+        # Upload to S3
+        content_type = f"image/{ext}"
+        if ext == 'jpg':
+            content_type = 'image/jpeg'
+        
+        success = upload_image_to_s3(
+            image_data=image_data,
+            bucket_name=bucket_name,
+            s3_key=s3_image_key,
+            aws_access_key=aws_access_key,
+            aws_secret_key=aws_secret_key,
+            content_type=content_type
+        )
+        
+        if success:
+            if ad_id not in ad_images_map:
+                ad_images_map[ad_id] = []
+            ad_images_map[ad_id].append(s3_image_key)
+            print(f"  ✓ Saved image for ad {ad_id}")
+    
+    return ad_images_map
+
+
+def get_partitioned_s3_path(member_id: int, shop_name: str, date: datetime = None, 
+                            folder: str = 'excel files') -> str:
     """
     Generate partitioned S3 path for shop data
-    Format: opensooq-data/shops/year=YYYY/month=MM/day=DD/shopname.xlsx
+    Format: opensooq-data/shops/year=YYYY/month=MM/day=DD/{folder}/shopname.xlsx
     
     Args:
         member_id: Shop member ID
@@ -394,7 +552,7 @@ def get_partitioned_s3_path(member_id: int, shop_name: str, date: datetime = Non
     month = date.strftime('%m')
     day = date.strftime('%d')
     
-    return f"year={year}/month={month}/day={day}/{safe_shop_name}.xlsx"
+    return f"year={year}/month={month}/day={day}/{folder}/{safe_shop_name}.xlsx"
 
 
 def update_incremental_info(existing_df: Optional[pd.DataFrame], 
