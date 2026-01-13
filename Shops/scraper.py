@@ -227,7 +227,12 @@ def process_shop(shop_item: Dict) -> bool:
         listings = shop_data.get('listings', {})
         all_ads = listings.get('items', [])
         
+        # Debug: Show what keys are available
         if not all_ads:
+            print(f"DEBUG: shop_data keys: {list(shop_data.keys())}")
+            if 'listings' in shop_data:
+                print(f"DEBUG: listings keys: {list(shop_data['listings'].keys())}")
+                print(f"DEBUG: listings meta: {shop_data['listings'].get('meta', {})}")
             print(f"No ads found for shop: {shop_name}")
             return False
         
@@ -236,9 +241,19 @@ def process_shop(shop_item: Dict) -> bool:
         
         print(f"Total ads: {len(all_ads)}, Yesterday's ads: {len(yesterday_ads)}")
         
+        # DEBUG: Show some posted_at values
+        if all_ads and len(all_ads) > 0:
+            print(f"DEBUG: Sample posted_at values:")
+            for i, ad in enumerate(all_ads[:3]):
+                print(f"  - Ad {i+1}: '{ad.get('posted_at', 'N/A')}'")
+        
         if not yesterday_ads:
             print(f"No yesterday ads for shop: {shop_name}")
-            return True  # Not an error, just no new ads
+            # TEMPORARY: Process all ads instead of just yesterday's
+            print(f"DEBUG: Processing ALL ads instead (temporary debug mode)")
+            yesterday_ads = all_ads
+            if not yesterday_ads:
+                return True  # Not an error, just no new ads
         
         # Prepare shop basic info
         shop_basic_info = {
