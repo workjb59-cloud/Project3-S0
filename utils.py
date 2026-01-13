@@ -421,9 +421,10 @@ def update_incremental_info(existing_df: Optional[pd.DataFrame],
             # Update existing row or append new
             existing_mask = existing_df['member_id'] == member_id
             if existing_mask.any():
-                # Update existing shop info
+                # Update existing shop info - use .update() to avoid dtype warnings
+                idx = existing_df.index[existing_mask][0]
                 for col in new_row_df.columns:
-                    existing_df.loc[existing_mask, col] = new_row_df[col].values[0]
+                    existing_df.at[idx, col] = new_row_df[col].values[0]
                 return existing_df
         
         # Append new shop using _append (recommended way in newer pandas)
