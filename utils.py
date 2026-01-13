@@ -375,13 +375,14 @@ def prepare_shop_info_row(shop_data: Dict) -> Dict:
         return {}
 
 
-def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict) -> pd.DataFrame:
+def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict, ad_images_map: Optional[Dict[int, List[str]]] = None) -> pd.DataFrame:
     """
     Prepare ads data for Excel export with basic shop info
     
     Args:
         ads: List of ad dictionaries
         shop_basic_info: Basic shop info to include with each ad
+        ad_images_map: Optional dict mapping ad_id to list of S3 image paths
     
     Returns:
         DataFrame with ads data
@@ -421,7 +422,8 @@ def prepare_ad_data(ads: List[Dict], shop_basic_info: Dict) -> pd.DataFrame:
                 'member_rating_count': ad.get('member_rating_count'),
                 'verification_level': ad.get('verification_level'),
                 'listing_status': ad.get('listing_status'),
-                'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                'scraped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                's3_image_path': '; '.join(ad_images_map.get(ad.get('id'), [])) if ad_images_map else None
             }
             rows.append(row)
         

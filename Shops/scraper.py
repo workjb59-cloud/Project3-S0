@@ -248,13 +248,6 @@ def process_shop(shop_item: Dict) -> bool:
             'shop_name': shop_name
         }
         
-        # Prepare ads DataFrame
-        ads_df = prepare_ad_data(yesterday_ads, shop_basic_info)
-        
-        if ads_df.empty:
-            print(f"Failed to prepare ads data for: {shop_name}")
-            return False
-        
         # Download and save ad images to S3
         print(f"Downloading images for {len(yesterday_ads)} ads...")
         ad_images_map = save_ad_images_to_s3(
@@ -268,6 +261,13 @@ def process_shop(shop_item: Dict) -> bool:
             aws_secret_key=AWS_SECRET_KEY
         )
         print(f"Saved {len(ad_images_map)} ad images")
+        
+        # Prepare ads DataFrame with image paths
+        ads_df = prepare_ad_data(yesterday_ads, shop_basic_info, ad_images_map)
+        
+        if ads_df.empty:
+            print(f"Failed to prepare ads data for: {shop_name}")
+            return False
         
         # Upload ads to S3 with partitioned path
         partitioned_path = get_partitioned_s3_path(member_id, shop_name, folder='excel files')
