@@ -145,8 +145,15 @@ class CommercialOffersProcessor:
                 # Create DataFrame
                 df = self.create_dataframe_for_subcategory(items, image_paths)
                 
-                # Use title as sheet name (truncate if too long, Excel limit is 31 chars)
-                sheet_name = title[:31] if len(title) > 31 else title
+                # Sanitize sheet name - remove invalid characters: / \ ? * [ ]
+                # Excel sheet name limit is 31 characters
+                sheet_name = title
+                invalid_chars = ['/', '\\', '?', '*', '[', ']', ':']
+                for char in invalid_chars:
+                    sheet_name = sheet_name.replace(char, '-')
+                
+                # Truncate if too long
+                sheet_name = sheet_name[:31] if len(sheet_name) > 31 else sheet_name
                 
                 # Write to Excel
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
