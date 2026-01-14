@@ -2,12 +2,21 @@ import requests
 import json
 import os
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, parse_qs, urlparse
 import time
 import logging
+from bs4 import BeautifulSoup
+import re
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('commercial_offers_scraper.log', encoding='utf-8')
+    ]
+)
 logger = logging.getLogger(__name__)
 
 
@@ -32,52 +41,71 @@ class CommercialOffersScraper:
         logger.info("Fetching subcategories...")
         
         try:
-            # The URL pattern for Next.js data
-            api_url = "https://kw.opensooq.com/_next/data/BUILD_ID/ar/العروض.json"
-            
-            # Try direct page request first
+            # Fetch the page
             response = self.session.get(self.BASE_URL)
             response.raise_for_status()
             
-            # Extract Next.js data from the page
-            if 'window.__NEXT_DATA__' in response.text:
-                # Parse the script tag containing __NEXT_DATA__
-                start_idx = response.text.find('window.__NEXT_DATA__ = ') + len('window.__NEXT_DATA__ = ')
-                end_idx = response.text.find('</script>', start_idx)
-                json_data = response.text[start_idx:end_idx].strip()
-                
-                # Remove trailing semicolon if present
-                if json_data.endswith(';'):
-                    json_data = json_data[:-1]
-                
-                data = json.loads(json_data)
-                
-                # Extract subcategories from pageProps
-                if 'pageProps' in data and 'commercialOffersData' in data['pageProps']:
-                    facets = data['pageProps']['commercialOffersData'].get('facets', [])
-                    
-                    subcategories = []
-                    for facet in facets:
-                        # Skip the "All" category
-                        if facet.get('is_selected', False):
-                            continue
-                        
-                        filters = facet.get('filters', {})
-                        if 'reporting_name' in filters:
-                            subcategories.append({
-                                'reporting_name': filters['reporting_name'],
-                                'title': facet.get('title', ''),
-                                'is_selected': facet.get('is_selected', False)
-                            })
-                    
-                    logger.info(f"Found {len(subcategories)} subcategories")
-                    return subcategories
+            logger.info(f"Response status: {response.status_code}")
             
-            logger.warning("Could not extract subcategories from page")
-            return []
+            # Method 1: Try to parse __NEXT_DATA__ from script tag
+            soup = BeautifulSoup(response.text, 'html.parser')
+            next_data_script = soup.find('script', {'id': '__NEXT_DATA__', 'type': 'application/json'})
+            
+            if next_data_script and next_data_script.string:
+                logger.info("Found __NEXT_DATA__ script tag")
+                try:
+                    data = json.loads(next_data_script.string)
+                    logger.info("Successfully parsed __NEXT_DATA__")
+                    
+                    # Check if it's in props
+                    if 'props' in data and 'pageProps' not in data:
+                        # The structure might be different
+                        logger.info(f"Data keys: {list(data.keys())}")
+                    
+                    # Navigate through the data structure
+                    # Based on the structure, data seems to be at root level
+                    # Since we can see categories in the HTML, let's parse them directly
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {e}")
+            
+            # Method 2: Parse HTML directly for category links
+            logger.info("Parsing HTML for category links...")
+            category_links = soup.find_all('a', href=re.compile(r'reporting_name='))
+            
+            logger.info(f"Found {len(category_links)} category links")
+            
+            subcategories = []
+            seen_names = set()
+            
+            for link in category_links:
+                href = link.get('href', '')
+                title = link.get_text(strip=True)
+                
+                # Parse the URL to extract reporting_name
+                parsed = urlparse(href)
+                params = parse_qs(parsed.query)
+                
+                if 'reporting_name' in params:
+                    reporting_name = params['reporting_name'][0]
+                    
+                    # Avoid duplicates
+                    if reporting_name not in seen_names:
+                        seen_names.add(reporting_name)
+                        subcategories.append({
+                            'reporting_name': reporting_name,
+                            'title': title,
+                            'is_selected': False
+                        })
+                        logger.debug(f"Added subcategory: {title} ({reporting_name})")
+            
+            logger.info(f"Found {len(subcategories)} unique subcategories")
+            return subcategories
             
         except Exception as e:
             logger.error(f"Error fetching subcategories: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     def get_offers_by_category(self, reporting_name, page=1):
@@ -104,32 +132,46 @@ class CommercialOffersScraper:
             response = self.session.get(url, params=params)
             response.raise_for_status()
             
-            # Extract Next.js data
-            if 'window.__NEXT_DATA__' in response.text:
-                start_idx = response.text.find('window.__NEXT_DATA__ = ') + len('window.__NEXT_DATA__ = ')
-                end_idx = response.text.find('</script>', start_idx)
-                json_data = response.text[start_idx:end_idx].strip()
-                
-                if json_data.endswith(';'):
-                    json_data = json_data[:-1]
-                
-                data = json.loads(json_data)
-                
-                # Extract items and meta from pageProps
-                if 'pageProps' in data and 'commercialOffersData' in data['pageProps']:
-                    commercial_data = data['pageProps']['commercialOffersData']
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try to extract from __NEXT_DATA__ script tag
+            next_data_script = soup.find('script', {'id': '__NEXT_DATA__', 'type': 'application/json'})
+            
+            if next_data_script and next_data_script.string:
+                try:
+                    data = json.loads(next_data_script.string)
+                    logger.debug("Successfully parsed __NEXT_DATA__")
                     
-                    items = commercial_data.get('items', [])
-                    meta = commercial_data.get('meta', {})
+                    # The data structure can vary, try multiple paths
+                    commercial_data = None
                     
-                    logger.info(f"Fetched {len(items)} items from page {page}")
+                    # Try path 1: props.pageProps.commercialOffersData
+                    if 'props' in data and 'pageProps' in data['props']:
+                        commercial_data = data['props']['pageProps'].get('commercialOffersData')
                     
-                    return {
-                        'items': items,
-                        'meta': meta
-                    }
+                    # Try path 2: pageProps.commercialOffersData (direct)
+                    elif 'pageProps' in data:
+                        commercial_data = data['pageProps'].get('commercialOffersData')
+                    
+                    if commercial_data:
+                        items = commercial_data.get('items', [])
+                        meta = commercial_data.get('meta', {})
+                        
+                        logger.info(f"Fetched {len(items)} items from page {page}")
+                        
+                        return {
+                            'items': items,
+                            'meta': meta
+                        }
+                    else:
+                        logger.warning(f"commercialOffersData not found in __NEXT_DATA__")
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {e}")
             
             logger.warning(f"No data found for {reporting_name} page {page}")
+            return {'items': [], 'meta': {}}
             return {'items': [], 'meta': {}}
             
         except Exception as e:
@@ -215,7 +257,36 @@ class CommercialOffersScraper:
 
 
 if __name__ == "__main__":
+    import sys
+    
     scraper = CommercialOffersScraper()
+    
+    # Debug mode: save HTML
+    if len(sys.argv) > 1 and sys.argv[1] == '--debug':
+        logger.info("Debug mode: Fetching page HTML...")
+        response = scraper.session.get(scraper.BASE_URL)
+        
+        html_file = f"commercial_offers_page_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        with open(html_file, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        logger.info(f"HTML saved to {html_file}")
+        
+        # Also save just the __NEXT_DATA__ if it exists
+        if 'window.__NEXT_DATA__' in response.text:
+            start_idx = response.text.find('window.__NEXT_DATA__ = ') + len('window.__NEXT_DATA__ = ')
+            end_idx = response.text.find('</script>', start_idx)
+            json_data = response.text[start_idx:end_idx].strip()
+            if json_data.endswith(';'):
+                json_data = json_data[:-1]
+            
+            json_file = f"commercial_offers_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(json_file, 'w', encoding='utf-8') as f:
+                f.write(json_data)
+            logger.info(f"__NEXT_DATA__ saved to {json_file}")
+        
+        sys.exit(0)
+    
+    # Normal mode
     data = scraper.scrape_all_offers()
     
     # Save to JSON for testing
