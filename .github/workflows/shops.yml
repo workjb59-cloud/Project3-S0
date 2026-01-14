@@ -1,4 +1,4 @@
-name: OpenSooq Daily Shop Scraper
+name: Shop Scraper
 
 on:
   # Run daily at 2:00 AM UTC (adjust as needed)
