@@ -1,4 +1,4 @@
-name: Commercial Offers Scraper
+name: Commercial Offers
 
 on:
   schedule:
