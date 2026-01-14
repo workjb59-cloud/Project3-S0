@@ -4,6 +4,7 @@ Automated web scraper for opensooq.com (Kuwait) that extracts shop information a
 
 ## 🎯 Features
 
+### Shops Scraper
 - ✅ Scrapes all shops from opensooq.com Kuwait متاجر section
 - ✅ Filters and extracts **yesterday's ads only**
 - ✅ Saves ad data as Excel files to AWS S3
@@ -11,6 +12,14 @@ Automated web scraper for opensooq.com (Kuwait) that extracts shop information a
 - ✅ Runs automatically via GitHub Actions (daily schedule)
 - ✅ Uses BeautifulSoup for HTML parsing
 - ✅ Respects server rate limits
+
+### Commercial Offers Scraper
+- ✅ Scrapes all commercial offers from OpenSooq Kuwait
+- ✅ Extracts offers from all subcategories (Car Rental, Domestic Care, etc.)
+- ✅ Downloads and uploads offer images to S3
+- ✅ Generates Excel file with separate sheets per subcategory
+- ✅ Runs automatically daily at 12:00 AM
+- ✅ Date-partitioned storage in S3
 
 ## 📁 Project Structure
 
@@ -23,9 +32,16 @@ Project3-S0/
 │   ├── config.py              # Category-specific configuration
 │   ├── scraper.py             # Shops scraping logic
 │   └── README.md
+├── Offers/                     # Commercial offers scraper
+│   ├── __init__.py
+│   ├── scraper.py             # Offers scraping logic
+│   ├── s3_uploader.py         # S3 upload utilities
+│   ├── processor.py           # Main processor
+│   └── README.md
 ├── .github/
 │   └── workflows/
-│       └── scraper.yml        # Daily automation
+│       ├── scraper.yml        # Shops daily automation
+│       └── commercial_offers_scraper.yml  # Offers daily automation
 └── README.MD
 ```
 
@@ -51,6 +67,21 @@ opensooq-data/
 │   │   │   │   └── ...
 │   │   └── month=02/
 │   │       └── ...
+├── commercial-offers/              # Commercial offers data
+│   ├── year=2026/
+│   │   ├── month=01/
+│   │   │   ├── day=14/
+│   │   │   │   ├── excel files/
+│   │   │   │   │   └── commercialoffers.xlsx
+│   │   │   │   └── images/
+│   │   │   │       ├── CarRental/
+│   │   │   │       │   ├── offer_1673.jpg
+│   │   │   │       │   └── ...
+│   │   │   │       ├── DomesticCare/
+│   │   │   │       │   └── ...
+│   │   │   │       └── ...
+│   │   │   ├── day=15/
+│   │   │   │   └── ...
 ├── cars/                           # Future: Cars category
 │   └── year=2026/...
 ├── real-estate/                    # Future: Real estate category
@@ -111,11 +142,23 @@ Add secrets to your GitHub repository:
 1. Go to repository **Settings** → **Secrets and variables** → **Actions**
 2. Click **New repository secret**
 3. Add the following secrets:
-   - `AWS_ACCESS_KEY_ID`
-   - `AWS_SECRET_ACCESS_KEY`
-   - `AWS_BUCKET_NAME`
+   - `AWS_ACCESS_KEY_ID` - Your AWS access key
+   - `AWS_SECRET_ACCESS_KEY` - Your AWS secret key
+   - `S3_BUCKET_NAME` - Your S3 bucket name (e.g., "opensooq-data")
 
 ### 4. Run Scraper
+
+#### Shops Scraper:
+```bash
+cd Shops
+python scraper.py
+```
+
+#### Commercial Offers Scraper:
+```bash
+cd Offers
+python processor.py
+```
 
 ```bash
 # Run Shops category scraper
@@ -127,18 +170,20 @@ python -m Shops.scraper
 
 ## ⚙️ GitHub Actions Workflow
 
-The scraper runs automatically every day at 2:00 AM UTC.
+The scrapers run automatically on a daily schedule.
 
+### Shops Scraper
 **Workflow file**: [`.github/workflows/scraper.yml`](.github/workflows/scraper.yml)
+- **Schedule**: Every day at 2:00 AM UTC
+- **Cron**: `0 2 * * *`
 
-### Schedule
-```yaml
-schedule:
-  - cron: '0 2 * * *'  # Daily at 2:00 AM UTC
-```
+### Commercial Offers Scraper
+**Workflow file**: [`.github/workflows/commercial_offers_scraper.yml`](.github/workflows/commercial_offers_scraper.yml)
+- **Schedule**: Every day at 12:00 AM UTC (midnight)
+- **Cron**: `0 0 * * *`
 
 ### Manual Trigger
-You can also trigger the workflow manually from the **Actions** tab in GitHub.
+You can also trigger both workflows manually from the **Actions** tab in GitHub.
 
 ## 📊 Data Fields
 
@@ -182,8 +227,28 @@ You can also trigger the workflow manually from the **Actions** tab in GitHub.
 | `verification_level` | Verification level (0-2) |
 | `scraped_at` | Last update timestamp |
 
+### Commercial Offers Data (commercial-offers/*.xlsx)
+
+Each sheet in the Excel file represents a subcategory with the following columns:
+
+| Field | Description |
+|-------|-------------|
+| `offer_id` | Unique offer ID |
+| `image_url` | Original image URL |
+| `s3_image_path` | S3 path where image is stored |
+| `whatsapp_number` | WhatsApp contact number |
+| `call_number` | Call contact number |
+| `deeplink` | Deeplink URL |
+| `share_deeplink` | Share deeplink URL |
+| `is_external` | Whether the offer is external |
+| `is_pinned` | Whether the offer is pinned |
+| `deeplink_button_text` | Text for deeplink button |
+| `views_count` | Number of views |
+| `scraped_at` | Timestamp when data was scraped |
+
 ## 🔍 How It Works
 
+### Shops Scraper
 1. **Fetch Shops List**: Scrapes all pages of the shops listing
 2. **Parse HTML**: Uses BeautifulSoup to extract JSON data from `__NEXT_DATA__` script tag
 3. **Filter Yesterday's Ads**: Checks `posted_at` field for "أمس", "قبل يوم", or hours/minutes
@@ -193,6 +258,17 @@ You can also trigger the workflow manually from the **Actions** tab in GitHub.
    - Ad images → `opensooq-data/shops/year=YYYY/month=MM/day=DD/images/{shop_name}/ad_{id}_main.jpg`
    - Shop info → `opensooq-data/info/info.xlsx` (incremental)
 6. **Rate Limiting**: 2-3 second delays between requests
+
+### Commercial Offers Scraper
+1. **Fetch Subcategories**: Extracts all commercial offer subcategories from the main page
+2. **Scrape Each Category**: Iterates through all subcategories (CarRental, DomesticCare, etc.)
+3. **Handle Pagination**: Automatically fetches all pages for each category
+4. **Download Images**: Downloads offer images and uploads to S3 with subcategory organization
+5. **Generate Excel**: Creates multi-sheet Excel file (one sheet per subcategory)
+6. **Upload to S3**:
+   - Excel file → `opensooq-data/commercial-offers/year=YYYY/month=MM/day=DD/excel files/commercialoffers.xlsx`
+   - Images → `opensooq-data/commercial-offers/year=YYYY/month=MM/day=DD/images/{subcategory}/offer_{id}.jpg`
+7. **Rate Limiting**: 1-2 second delays between requests
 
 ## 🛠️ Key Functions
 
