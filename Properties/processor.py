@@ -35,10 +35,26 @@ class PropertiesProcessor:
         """
         if not member_data:
             return {}
-        
+        # Debug: log the structure of member_data
+        logger.debug(f"Raw member_data: {json.dumps(member_data, ensure_ascii=False)[:500]}")
+        # Try the original path
         member_info = member_data.get('info', {}).get('member', {})
-        rating = member_info.get('rating', {})
-        
+        if not member_info:
+            # Fallback: try to find a member dict at the top level or in pageProps
+            if 'member' in member_data:
+                member_info = member_data['member']
+            elif 'pageProps' in member_data and 'member' in member_data['pageProps']:
+                member_info = member_data['pageProps']['member']
+            else:
+                # Try to find a dict with id and name keys
+                for v in member_data.values():
+                    if isinstance(v, dict) and 'id' in v and 'branding' in v:
+                        member_info = v
+                        break
+        rating = member_info.get('rating', {}) if member_info else {}
+        if not member_info or not member_info.get('id'):
+            logger.warning(f"Could not extract member info from: {json.dumps(member_data, ensure_ascii=False)[:500]}")
+            return {}
         return {
             'member_id': member_info.get('id'),
             'name': member_info.get('branding', {}).get('name'),

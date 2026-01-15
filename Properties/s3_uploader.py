@@ -69,10 +69,10 @@ class S3Uploader:
                 # Extract category type from first property if available
                 properties = cat_data.get('properties', [])
                 if properties:
-                    category_type = properties[0].get('category_type', 'unknown')
+                    # Use cat1_label from category field for top-level category
+                    category_type = properties[0].get('category', {}).get('cat1_label', 'unknown')
                 else:
                     category_type = 'unknown'
-                
                 s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_type}/{date_str}/{subcategory.replace('/', '_')}.json"
                 
                 # Upload file
