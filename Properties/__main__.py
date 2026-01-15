@@ -35,36 +35,32 @@ class PropertiesScraperWorkflow:
         return listings
     
     def fetch_member_details(self, listings: list) -> dict:
-        """Fetch detailed member information for all sellers in listings using member_link (username)"""
+        """Fetch detailed member information for all sellers in listings using full member_link"""
         member_details = {}
-        unique_usernames = set()
+        unique_links = set()
         for listing in listings:
             seller = listing.get('seller', {})
             member_link = seller.get('member_link')
             if member_link:
-                # Extract username from member_link (e.g., '/ar/mid/member-USERNAME')
-                if 'member-' in member_link:
-                    username = member_link.split('member-')[-1].strip('/')
-                    if username:
-                        unique_usernames.add(username)
+                unique_links.add(member_link)
 
-        logger.info(f"Fetching detailed info for {len(unique_usernames)} unique members...")
+        logger.info(f"Fetching detailed info for {len(unique_links)} unique members...")
 
-        for i, username in enumerate(unique_usernames, 1):
-            if username in member_details:
+        for i, member_link in enumerate(unique_links, 1):
+            if member_link in member_details:
                 continue
 
-            logger.info(f"Fetching member {i}/{len(unique_usernames)}: {username}")
+            logger.info(f"Fetching member {i}/{len(unique_links)}: {member_link}")
             try:
-                member_data = self.scraper.fetch_member_profile(username)
+                member_data = self.scraper.fetch_member_profile(member_link)
                 if member_data:
                     full_info = self.processor.extract_member_full_info(member_data)
                     if full_info:
-                        member_details[username] = full_info
+                        member_details[member_link] = full_info
                     else:
-                        logger.warning(f"Could not extract member info for {username}")
+                        logger.warning(f"Could not extract member info for {member_link}")
             except Exception as e:
-                logger.error(f"Error fetching member {username}: {str(e)}")
+                logger.error(f"Error fetching member {member_link}: {str(e)}")
 
         logger.info(f"Successfully fetched details for {len(member_details)} members")
         return member_details

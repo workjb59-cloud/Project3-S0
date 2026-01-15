@@ -169,12 +169,13 @@ class PropertiesScraper:
             logger.error(f"Error fetching listing {listing_id}: {str(e)}")
             return None
     
-    def fetch_member_profile(self, username: str) -> Optional[Dict]:
+    def fetch_member_profile(self, member_link: str) -> Optional[Dict]:
         """
-        Fetch member profile page with all rating info using username
+        Fetch member profile page with all rating info using the full member_link path
         """
         try:
-            url = f"{self.BASE_URL}/mid/member-{username}"
+            # member_link is a full path like '/ar/mid/member-152681542881'
+            url = f"https://kw.opensooq.com{member_link}"
             logger.info(f"Fetching member profile: {url}")
 
             response = self.session.get(url, timeout=10)
@@ -189,7 +190,7 @@ class PropertiesScraper:
 
             return None
         except Exception as e:
-            logger.error(f"Error fetching member {username}: {str(e)}")
+            logger.error(f"Error fetching member {member_link}: {str(e)}")
             return None
     
     def scrape_category(self, category_type: str, category_url: str) -> List[Dict]:
