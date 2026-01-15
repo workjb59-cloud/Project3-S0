@@ -196,42 +196,43 @@ class PropertiesScraper:
     
     def scrape_category(self, category_type: str, category_url: str) -> List[Dict]:
         """
-        Scrape all listings from a category, filtering for yesterday's posts only
-        Returns list of listing dictionaries with details and seller info
+        Scrape all listings from a category, filtering for yesterday's posts only.
+        Returns list of processed listing dictionaries with details and seller info.
         """
         all_listings = []
         page = 1
         max_pages = 100  # Safety limit
-        
+
         while page <= max_pages:
             page_data = self.fetch_category_page(category_url, page)
-            
+
             if not page_data or 'serpApiResponse' not in page_data:
                 logger.warning(f"No data found for {category_url} page {page}")
                 break
-            
+
             listings = page_data['serpApiResponse'].get('listings', {}).get('items', [])
-            
+
             if not listings:
                 logger.info(f"No listings on page {page}")
                 break
-            
-            # Filter for yesterday's listings
+
+            # Filter for yesterday's listings and process them
             for listing in listings:
                 if self.is_yesterday_by_date(listing.get('inserted_date', '')):
                     listing['category_type'] = category_type
-                    all_listings.append(listing)
-            
+                    processed = self.extract_property_details(listing)
+                    all_listings.append(processed)
+
             # Check pagination
             meta = page_data['serpApiResponse'].get('listings', {}).get('meta', {})
             total_pages = meta.get('pages', 1)
             current_page = meta.get('current_page', 1)
-            
+
             if current_page >= total_pages:
                 break
-            
+
             page += 1
-        
+
         logger.info(f"Found {len(all_listings)} listings from {category_type}")
         return all_listings
     
