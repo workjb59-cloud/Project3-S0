@@ -42,7 +42,7 @@ jobs:
           AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           cd Properties
-          python -m __main__ --categories ${{ github.event.inputs.categories || 'rental sale' }}
+          python __main__.py --categories ${{ github.event.inputs.categories || 'rental sale' }}
 
       - name: Upload logs on failure
         if: failure()
