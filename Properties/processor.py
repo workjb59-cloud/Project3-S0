@@ -64,19 +64,18 @@ class PropertiesProcessor:
     
     def extract_property_by_subcategory(self, listings: List[Dict]) -> Dict[str, List[Dict]]:
         """
-        Group property listings by subcategory
+        Group property listings by subcategory (cat2_label inside category field)
         Returns dict with subcategory as key and list of properties as value
         """
         grouped = {}
-        
         for listing in listings:
-            cat2_label = listing.get('cat2_label', 'unknown')
-            
+            cat2_label = (
+                listing.get('category', {}).get('cat2_label')
+                or 'unknown'
+            )
             if cat2_label not in grouped:
                 grouped[cat2_label] = []
-            
             grouped[cat2_label].append(listing)
-        
         return grouped
     
     def prepare_properties_json(self, listings: List[Dict]) -> Dict[str, List[Dict]]:
