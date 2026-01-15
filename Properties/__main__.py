@@ -37,14 +37,20 @@ class PropertiesScraperWorkflow:
     def fetch_member_details(self, listings: list) -> dict:
         """Fetch detailed member information for all sellers in listings"""
         member_details = {}
-        unique_members = set(listing.get('member_id') for listing in listings)
-        
+        # Extract member_id from the seller field of each listing
+        unique_members = set()
+        for listing in listings:
+            seller = listing.get('seller', {})
+            member_id = seller.get('member_id')
+            if member_id:
+                unique_members.add(member_id)
+
         logger.info(f"Fetching detailed info for {len(unique_members)} unique members...")
-        
+
         for i, member_id in enumerate(unique_members, 1):
             if member_id in member_details:
                 continue
-            
+
             logger.info(f"Fetching member {i}/{len(unique_members)}: {member_id}")
             try:
                 member_data = self.scraper.fetch_member_profile(member_id)
@@ -56,7 +62,7 @@ class PropertiesScraperWorkflow:
                         logger.warning(f"Could not extract member info for {member_id}")
             except Exception as e:
                 logger.error(f"Error fetching member {member_id}: {str(e)}")
-        
+
         logger.info(f"Successfully fetched details for {len(member_details)} members")
         return member_details
     
