@@ -169,29 +169,27 @@ class PropertiesScraper:
             logger.error(f"Error fetching listing {listing_id}: {str(e)}")
             return None
     
-    def fetch_member_profile(self, member_id: int) -> Optional[Dict]:
+    def fetch_member_profile(self, username: str) -> Optional[Dict]:
         """
-        Fetch member profile page with all rating info
+        Fetch member profile page with all rating info using username
         """
         try:
-            # Member link format: /ar/mid/member-{username}
-            # We need to get the username from listing, but we can use member_id
-            url = f"{self.BASE_URL}/mid/member-{member_id}"
+            url = f"{self.BASE_URL}/mid/member-{username}"
             logger.info(f"Fetching member profile: {url}")
-            
+
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            
+
             soup = BeautifulSoup(response.content, 'html.parser')
             script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-            
+
             if script_tag:
                 data = json.loads(script_tag.string)
                 return data.get('props', {}).get('pageProps', {})
-            
+
             return None
         except Exception as e:
-            logger.error(f"Error fetching member {member_id}: {str(e)}")
+            logger.error(f"Error fetching member {username}: {str(e)}")
             return None
     
     def scrape_category(self, category_type: str, category_url: str) -> List[Dict]:
