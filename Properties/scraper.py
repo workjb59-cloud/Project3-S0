@@ -236,7 +236,7 @@ class PropertiesScraper:
         return all_listings
     
     def get_seller_info(self, listing: Dict) -> Dict:
-        """Extract seller/member basic info from listing"""
+        """Extract seller/member basic info from listing, including member_link for profile fetching"""
         return {
             'member_id': listing.get('member_id'),
             'member_display_name': listing.get('member_display_name'),
@@ -244,6 +244,7 @@ class PropertiesScraper:
             'member_avatar_uri': listing.get('member_avatar_uri'),
             'member_rating_avg': listing.get('member_rating_avg'),
             'member_rating_count': listing.get('member_rating_count'),
+            'member_link': listing.get('member_link'),
         }
     
     def extract_property_details(self, listing: Dict) -> Dict:
