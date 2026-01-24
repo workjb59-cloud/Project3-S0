@@ -52,7 +52,7 @@ class S3Uploader:
     def upload_properties_file(self, local_file_path: str, properties_data: dict) -> Tuple[bool, str]:
         """
         Upload properties data file to S3
-        Structure: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/{subcategory}.json
+        Structure: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/json files/{subcategory}.json
         
         Args:
             local_file_path: Path to local JSON file (for reference)
@@ -77,7 +77,7 @@ class S3Uploader:
                 else:
                     category_label = 'unknown'
                 
-                s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_label}/year={year}/month={month}/day={day}/{subcategory}.json"
+                s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_label}/year={year}/month={month}/day={day}/json files/{subcategory}.json"
                 
                 # Upload file
                 self.s3_client.put_object(
