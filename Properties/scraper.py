@@ -376,8 +376,15 @@ class PropertiesScraper:
             # Filter for yesterday's listings and process them
             for listing in listings:
                 if self.is_yesterday_by_date(listing.get('inserted_date', '')):
+                    listing_id = listing.get('id')
+                    logger.debug(f"Processing listing {listing_id} from list endpoint")
+                    
+                    # Fetch detail page to get complete listing object with media, basic_info, etc.
+                    listing_detail = self.fetch_listing_detail(listing)
+                    
+                    # Extract the complete listing object from detail page
                     listing['category_type'] = category_type
-                    processed = self.extract_property_details(listing)
+                    processed = self.extract_property_details(listing, listing_detail)
                     all_listings.append(processed)
 
             # Check pagination
@@ -405,47 +412,47 @@ class PropertiesScraper:
             'member_link': listing.get('member_link'),
         }
     
-    def extract_property_details(self, listing: Dict) -> Dict:
+    def extract_property_details(self, listing: Dict, listing_detail: Dict = None) -> Dict:
         """
-        Extract complete listing object from API response.
-        Stores the entire listing object with all nested data while adding metadata fields.
-        Normalizes field names to ensure consistency between list and detail endpoints.
+        Extract complete listing object from detail page.
+        Falls back to list endpoint data if detail page not available.
+        
+        Args:
+            listing: Basic listing from list endpoint
+            listing_detail: Complete listing detail from detail page (contains postData.listing)
         """
-        # Create a copy of the listing to preserve all original data
+        # Try to get complete listing object from detail page first
+        if listing_detail and isinstance(listing_detail, dict):
+            # Extract the complete listing object from postData.listing
+            post_data = listing_detail.get('postData', {})
+            if isinstance(post_data, dict) and 'listing' in post_data:
+                complete_listing = post_data['listing']
+                if isinstance(complete_listing, dict):
+                    logger.debug(f"Using complete listing object from detail page")
+                    # Add list endpoint data as fallback
+                    complete_listing['_list_data'] = listing
+                    complete_listing['category_type'] = listing.get('category_type')
+                    # Ensure listing_id is set
+                    if 'listing_id' not in complete_listing and 'id' not in complete_listing:
+                        complete_listing['listing_id'] = listing.get('id')
+                    return complete_listing
+        
+        # Fallback: Use list endpoint data and normalize it
         property_data = dict(listing)
         
-        # Debug: Log field names once to understand the structure
-        if not hasattr(self, '_fields_logged'):
-            logger.info(f"List endpoint fields: {list(property_data.keys())}")
-            self._fields_logged = True
-        
-        # Normalize field names for consistency
-        # List endpoint returns 'id', detail endpoint returns 'listing_id'
+        # Ensure listing_id exists
         if 'id' in property_data and 'listing_id' not in property_data:
             property_data['listing_id'] = property_data['id']
         
-        # Ensure title field exists (might be 'title' or something else)
+        # Ensure required fields
         if 'title' not in property_data:
-            # Try alternative field names
-            property_data['title'] = (property_data.get('title') or 
-                                     property_data.get('post_title') or 
-                                     'Untitled')
+            property_data['title'] = 'Untitled'
         
-        # Ensure price_amount field exists
         if 'price_amount' not in property_data:
-            # List endpoint might have just 'price' or nested price
-            if 'price' in property_data:
-                price = property_data['price']
-                if isinstance(price, dict):
-                    property_data['price_amount'] = price.get('price_amount') or price.get('price')
-                else:
-                    property_data['price_amount'] = price
-            else:
-                property_data['price_amount'] = 0
+            property_data['price_amount'] = 0
         
-        # Build category object if it doesn't exist
+        # Build category object
         if 'category' not in property_data:
-            # Build from individual fields if they exist
             property_data['category'] = {
                 'cat1_code': property_data.get('cat1_code'),
                 'cat1_label': property_data.get('cat1_label', 'unknown'),
@@ -453,9 +460,9 @@ class PropertiesScraper:
                 'cat2_label': property_data.get('cat2_label', 'unknown'),
             }
         
-        # Add metadata fields for tracking
-        property_data['local_images_dir'] = None  # Will be populated after image download
-        property_data['s3_image_path'] = None  # Will be populated during processing
-        property_data['seller_info'] = self.get_seller_info(listing)  # Add seller info separately
+        # Add metadata fields
+        property_data['local_images_dir'] = None
+        property_data['s3_image_path'] = None
+        property_data['seller_info'] = self.get_seller_info(listing)
         
         return property_data
