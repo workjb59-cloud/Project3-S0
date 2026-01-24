@@ -73,6 +73,7 @@ class PropertiesScraperWorkflow:
         logger.info("Downloading images for listings...")
         
         listings_with_images = {}
+        skipped_no_images = 0
         
         for i, listing in enumerate(listings, 1):
             listing_id = listing.get('listing_id')
@@ -81,26 +82,28 @@ class PropertiesScraperWorkflow:
             
             # Skip if no images expected
             if not listing.get('images_count') or listing.get('images_count') == 0:
+                skipped_no_images += 1
                 continue
             
             try:
+                logger.debug(f"Processing listing {listing_id} - Expected {listing.get('images_count')} images")
+                
                 # Fetch listing detail to get full image data
                 listing_detail = self.scraper.fetch_listing_detail(listing_id)
-                if not listing_detail:
-                    logger.warning(f"Could not fetch listing detail for {listing_id}")
-                    continue
                 
-                # Download images
-                downloaded = self.scraper.download_listing_images(listing_id, listing_detail)
+                # Download images (pass both listing detail and original listing as fallback)
+                downloaded = self.scraper.download_listing_images(listing_id, listing_detail, listing)
                 if downloaded:
                     local_dir = str(self.scraper.images_dir / f"{listing_id}")
                     listings_with_images[listing_id] = local_dir
-                    logger.info(f"Downloaded {len(downloaded)} images for listing {listing_id} ({i}/{len(listings)})")
+                    logger.info(f"✓ Downloaded {len(downloaded)} images for listing {listing_id} ({i}/{len(listings)})")
+                else:
+                    logger.warning(f"✗ No images downloaded for listing {listing_id} despite {listing.get('images_count')} expected")
                 
             except Exception as e:
-                logger.warning(f"Error downloading images for listing {listing_id}: {str(e)}")
+                logger.error(f"Error downloading images for listing {listing_id}: {str(e)}", exc_info=True)
         
-        logger.info(f"Downloaded images for {len(listings_with_images)} listings")
+        logger.info(f"Image download summary: {len(listings_with_images)} succeeded, {skipped_no_images} skipped (no images), total processed: {len(listings)}")
         return listings_with_images
     
     def process_and_save(self, all_listings: list, member_details: dict, listings_with_images: dict = None) -> tuple:
@@ -141,6 +144,7 @@ class PropertiesScraperWorkflow:
         
         total_uploaded = 0
         total_failed = 0
+        total_skipped = 0
         
         for subcategory, cat_data in properties_data.items():
             for prop in cat_data.get('properties', []):
@@ -149,14 +153,24 @@ class PropertiesScraperWorkflow:
                 
                 if listing_id in listings_with_images and s3_image_path:
                     local_dir = listings_with_images[listing_id]
+                    logger.debug(f"Uploading images for listing {listing_id} to {s3_image_path}")
                     success, count = self.s3_uploader.upload_images_to_s3(local_dir, s3_image_path, listing_id)
                     
                     if success:
                         total_uploaded += count
+                        if count > 0:
+                            logger.info(f"✓ Uploaded {count} images for listing {listing_id}")
                     else:
                         total_failed += 1
+                        logger.error(f"✗ Failed to upload images for listing {listing_id}")
+                else:
+                    total_skipped += 1
+                    if not (listing_id in listings_with_images):
+                        logger.debug(f"No images downloaded for listing {listing_id}")
+                    if not s3_image_path:
+                        logger.debug(f"No S3 path for listing {listing_id}")
         
-        logger.info(f"Uploaded images to S3: {total_uploaded} images, {total_failed} failed")
+        logger.info(f"Image upload summary: {total_uploaded} uploaded, {total_failed} failed, {total_skipped} skipped")
         return total_uploaded, total_failed
 
     def upload_to_s3(self, properties_file: str, members_file: str) -> bool:

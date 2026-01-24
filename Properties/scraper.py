@@ -108,14 +108,15 @@ class PropertiesScraper:
             logger.warning(f"Failed to download image {image_url}: {str(e)}")
             return False
     
-    def download_listing_images(self, listing_id: int, listing_detail: Dict) -> Dict[str, str]:
+    def download_listing_images(self, listing_id: int, listing_detail: Dict = None, listing: Dict = None) -> Dict[str, str]:
         """
         Download all images for a listing
         Returns dict mapping image filenames to their local paths
         
         Args:
             listing_id: OpenSooq listing ID
-            listing_detail: Listing detail data from fetch_listing_detail
+            listing_detail: Listing detail data from fetch_listing_detail (optional)
+            listing: Original listing data (optional, fallback)
         
         Returns:
             Dict of {image_filename: local_path}
@@ -123,14 +124,36 @@ class PropertiesScraper:
         downloaded_images = {}
         
         try:
+            logger.info(f"Attempting to download images for listing {listing_id}")
+            
             # Navigate through the listing detail structure to find images
             images_data = []
             
             # Try multiple possible paths where images might be stored
-            if 'listing' in listing_detail and 'images' in listing_detail['listing']:
-                images_data = listing_detail['listing']['images']
-            elif 'images' in listing_detail:
-                images_data = listing_detail['images']
+            if listing_detail and isinstance(listing_detail, dict):
+                logger.debug(f"Listing detail keys: {list(listing_detail.keys())}")
+                if 'listing' in listing_detail and isinstance(listing_detail['listing'], dict):
+                    if 'images' in listing_detail['listing']:
+                        images_data = listing_detail['listing']['images']
+                        logger.debug(f"Found images in listing_detail['listing']['images']: {len(images_data)} items")
+                if not images_data and 'images' in listing_detail:
+                    images_data = listing_detail['images']
+                    logger.debug(f"Found images in listing_detail['images']: {len(images_data)} items")
+                if not images_data and 'serpApiResponse' in listing_detail:
+                    api_response = listing_detail['serpApiResponse']
+                    if isinstance(api_response, dict) and 'images' in api_response:
+                        images_data = api_response['images']
+                        logger.debug(f"Found images in listing_detail['serpApiResponse']['images']: {len(images_data)} items")
+            
+            # Fallback to original listing if available and no images found
+            if not images_data and listing and isinstance(listing, dict):
+                logger.debug(f"Checking original listing for images")
+                if 'images' in listing:
+                    images_data = listing.get('images', [])
+                    logger.debug(f"Found images in listing['images']: {len(images_data)} items")
+                elif 'image_urls' in listing:
+                    images_data = listing.get('image_urls', [])
+                    logger.debug(f"Found images in listing['image_urls']: {len(images_data)} items")
             
             if not images_data:
                 logger.debug(f"No images found for listing {listing_id}")
@@ -140,14 +163,22 @@ class PropertiesScraper:
             listing_images_dir = self.images_dir / f"{listing_id}"
             listing_images_dir.mkdir(exist_ok=True, parents=True)
             
+            logger.debug(f"Found {len(images_data)} images for listing {listing_id}")
+            
             # Download each image
             for idx, image_info in enumerate(images_data, 1):
                 if isinstance(image_info, dict):
-                    image_url = image_info.get('original') or image_info.get('full') or image_info.get('url')
+                    # Try multiple keys where image URL might be
+                    image_url = (image_info.get('original') or 
+                                image_info.get('full') or 
+                                image_info.get('url') or
+                                image_info.get('src') or
+                                image_info.get('image_url'))
                 else:
                     image_url = str(image_info)
                 
                 if not image_url:
+                    logger.debug(f"No URL found for image {idx} in listing {listing_id}")
                     continue
                 
                 # Generate filename
@@ -164,7 +195,7 @@ class PropertiesScraper:
             logger.info(f"Downloaded {len(downloaded_images)} images for listing {listing_id}")
             
         except Exception as e:
-            logger.warning(f"Error downloading images for listing {listing_id}: {str(e)}")
+            logger.error(f"Error downloading images for listing {listing_id}: {str(e)}", exc_info=True)
         
         return downloaded_images
     
