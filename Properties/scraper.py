@@ -409,9 +409,15 @@ class PropertiesScraper:
         """
         Extract complete listing object from API response.
         Stores the entire listing object with all nested data while adding metadata fields.
+        Normalizes field names to ensure consistency (e.g., 'id' -> 'listing_id').
         """
         # Create a copy of the listing to preserve all original data
         property_data = dict(listing)
+        
+        # Normalize field names for consistency
+        # List endpoint returns 'id', detail endpoint returns 'listing_id'
+        if 'id' in property_data and 'listing_id' not in property_data:
+            property_data['listing_id'] = property_data['id']
         
         # Add metadata fields for tracking
         property_data['local_images_dir'] = None  # Will be populated after image download
