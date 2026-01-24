@@ -230,6 +230,13 @@ class DataValidator:
     def validate_property(property_data: Dict) -> bool:
         """Validate required fields in property data"""
         required_fields = ['listing_id', 'title', 'price_amount', 'category']
+        
+        # Debug first property to see available fields
+        if not hasattr(DataValidator, '_debug_logged'):
+            logger.info(f"Sample property fields: {list(property_data.keys())[:15]}")
+            logger.info(f"Checking for: {required_fields}")
+            DataValidator._debug_logged = True
+        
         return all(field in property_data for field in required_fields)
     
     @staticmethod

@@ -409,15 +409,49 @@ class PropertiesScraper:
         """
         Extract complete listing object from API response.
         Stores the entire listing object with all nested data while adding metadata fields.
-        Normalizes field names to ensure consistency (e.g., 'id' -> 'listing_id').
+        Normalizes field names to ensure consistency between list and detail endpoints.
         """
         # Create a copy of the listing to preserve all original data
         property_data = dict(listing)
+        
+        # Debug: Log field names once to understand the structure
+        if not hasattr(self, '_fields_logged'):
+            logger.info(f"List endpoint fields: {list(property_data.keys())}")
+            self._fields_logged = True
         
         # Normalize field names for consistency
         # List endpoint returns 'id', detail endpoint returns 'listing_id'
         if 'id' in property_data and 'listing_id' not in property_data:
             property_data['listing_id'] = property_data['id']
+        
+        # Ensure title field exists (might be 'title' or something else)
+        if 'title' not in property_data:
+            # Try alternative field names
+            property_data['title'] = (property_data.get('title') or 
+                                     property_data.get('post_title') or 
+                                     'Untitled')
+        
+        # Ensure price_amount field exists
+        if 'price_amount' not in property_data:
+            # List endpoint might have just 'price' or nested price
+            if 'price' in property_data:
+                price = property_data['price']
+                if isinstance(price, dict):
+                    property_data['price_amount'] = price.get('price_amount') or price.get('price')
+                else:
+                    property_data['price_amount'] = price
+            else:
+                property_data['price_amount'] = 0
+        
+        # Build category object if it doesn't exist
+        if 'category' not in property_data:
+            # Build from individual fields if they exist
+            property_data['category'] = {
+                'cat1_code': property_data.get('cat1_code'),
+                'cat1_label': property_data.get('cat1_label', 'unknown'),
+                'cat2_code': property_data.get('cat2_code'),
+                'cat2_label': property_data.get('cat2_label', 'unknown'),
+            }
         
         # Add metadata fields for tracking
         property_data['local_images_dir'] = None  # Will be populated after image download
