@@ -416,6 +416,7 @@ class PropertiesScraper:
         """
         Extract complete listing object from detail page.
         Falls back to list endpoint data if detail page not available.
+        Normalizes category structure for consistent processing.
         
         Args:
             listing: Basic listing from list endpoint
@@ -432,9 +433,26 @@ class PropertiesScraper:
                     # Add list endpoint data as fallback
                     complete_listing['_list_data'] = listing
                     complete_listing['category_type'] = listing.get('category_type')
+                    
                     # Ensure listing_id is set
                     if 'listing_id' not in complete_listing and 'id' not in complete_listing:
                         complete_listing['listing_id'] = listing.get('id')
+                    
+                    # Normalize category structure from detail page to processor format
+                    # Detail page has: category{label, reporting_name, ...} and sub_category{label, ...}
+                    # Processor expects: category{cat1_label, cat2_label, ...}
+                    if isinstance(complete_listing.get('category'), dict):
+                        category = complete_listing['category']
+                        sub_category = complete_listing.get('sub_category', {})
+                        
+                        # Build normalized category object
+                        complete_listing['category'] = {
+                            'cat1_code': category.get('reporting_name') or listing.get('cat1_code'),
+                            'cat1_label': category.get('label') or listing.get('cat1_label', 'unknown'),
+                            'cat2_code': sub_category.get('reporting_name') or listing.get('cat2_code'),
+                            'cat2_label': sub_category.get('label') or listing.get('cat2_label', 'unknown'),
+                        }
+                    
                     return complete_listing
         
         # Fallback: Use list endpoint data and normalize it

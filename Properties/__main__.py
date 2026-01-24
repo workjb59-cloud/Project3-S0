@@ -69,6 +69,8 @@ class PropertiesScraperWorkflow:
         """
         Download images for all listings
         Returns dict mapping listing_id to local images directory
+        
+        Note: Listings already contain complete data from detail pages with postData.listing
         """
         logger.info("Downloading images for listings...")
         
@@ -81,24 +83,30 @@ class PropertiesScraperWorkflow:
                 continue
             
             # Skip if no images expected
-            if not listing.get('images_count') or listing.get('images_count') == 0:
+            image_count = listing.get('image_count') or listing.get('images_count') or 0
+            if not image_count or image_count == 0:
                 skipped_no_images += 1
                 continue
             
             try:
-                logger.debug(f"Processing listing {listing_id} - Expected {listing.get('images_count')} images")
+                logger.debug(f"Processing listing {listing_id} - Expected {image_count} images")
                 
-                # Fetch listing detail to get full image data
-                listing_detail = self.scraper.fetch_listing_detail(listing_id)
+                # Create listing_detail structure with the complete listing data
+                # The listing is already the complete object from postData.listing
+                listing_detail = {
+                    'postData': {
+                        'listing': listing
+                    }
+                }
                 
-                # Download images (pass both listing detail and original listing as fallback)
+                # Download images using the complete listing data
                 downloaded = self.scraper.download_listing_images(listing_id, listing_detail, listing)
                 if downloaded:
                     local_dir = str(self.scraper.images_dir / f"{listing_id}")
                     listings_with_images[listing_id] = local_dir
                     logger.info(f"✓ Downloaded {len(downloaded)} images for listing {listing_id} ({i}/{len(listings)})")
                 else:
-                    logger.warning(f"✗ No images downloaded for listing {listing_id} despite {listing.get('images_count')} expected")
+                    logger.warning(f"✗ No images downloaded for listing {listing_id} despite {image_count} expected")
                 
             except Exception as e:
                 logger.error(f"Error downloading images for listing {listing_id}: {str(e)}", exc_info=True)
