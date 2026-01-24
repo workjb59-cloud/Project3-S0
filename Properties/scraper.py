@@ -209,8 +209,8 @@ class PropertiesScraper:
                     
                     # If we found a URI (relative path), convert to full URL
                     if image_uri and not image_url.startswith('http'):
-                        # OpenSooq CDN URL format: https://opensooq-images.os-cdn.com/{uri}
-                        image_url = f"https://opensooq-images.os-cdn.com/{image_uri}"
+                        # OpenSooq CDN URL format: https://opensooq-images.os-cdn.com/previews/0x720/{uri}.webp
+                        image_url = f"https://opensooq-images.os-cdn.com/previews/0x720/{image_uri}.webp"
                         logger.debug(f"Converted URI to full URL: {image_url}")
                     
                     if not image_url:
