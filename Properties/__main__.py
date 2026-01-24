@@ -82,14 +82,19 @@ class PropertiesScraperWorkflow:
             if not listing_id:
                 continue
             
-            # Skip if no images expected
+            # Check if listing has images - look for media array or image_count
+            has_media = bool(listing.get('media'))  # Detail page has media array
             image_count = listing.get('image_count') or listing.get('images_count') or 0
-            if not image_count or image_count == 0:
+            has_list_images = bool(image_count) and image_count > 0
+            
+            # Skip only if definitely no images
+            if not has_media and not has_list_images:
                 skipped_no_images += 1
+                logger.debug(f"Skipping listing {listing_id} - no media array and image_count=0")
                 continue
             
             try:
-                logger.debug(f"Processing listing {listing_id} - Expected {image_count} images")
+                logger.debug(f"Processing listing {listing_id} - has_media={has_media}, image_count={image_count}")
                 
                 # Create listing_detail structure with the complete listing data
                 # The listing is already the complete object from postData.listing
@@ -106,7 +111,7 @@ class PropertiesScraperWorkflow:
                     listings_with_images[listing_id] = local_dir
                     logger.info(f"✓ Downloaded {len(downloaded)} images for listing {listing_id} ({i}/{len(listings)})")
                 else:
-                    logger.warning(f"✗ No images downloaded for listing {listing_id} despite {image_count} expected")
+                    logger.warning(f"✗ No images downloaded for listing {listing_id} despite has_media={has_media}, image_count={image_count}")
                 
             except Exception as e:
                 logger.error(f"Error downloading images for listing {listing_id}: {str(e)}", exc_info=True)
