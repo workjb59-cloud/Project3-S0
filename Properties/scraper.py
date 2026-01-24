@@ -406,32 +406,16 @@ class PropertiesScraper:
         }
     
     def extract_property_details(self, listing: Dict) -> Dict:
-        """Extract property details and seller info from listing"""
-        return {
-            'listing_id': listing.get('id'),
-            'title': listing.get('title'),
-            'description': listing.get('masked_description'),
-            'price_amount': listing.get('price_amount'),
-            'price_currency': listing.get('price_currency_iso'),
-            'category': {
-                'cat1_code': listing.get('cat1_code'),
-                'cat1_label': listing.get('cat1_label'),
-                'cat2_code': listing.get('cat2_code'),
-                'cat2_label': listing.get('cat2_label'),
-            },
-            'location': {
-                'city_id': listing.get('city_id'),
-                'city_label': listing.get('city_label'),
-                'nhood_id': listing.get('nhood_id'),
-                'nhood_label': listing.get('nhood_label'),
-            },
-            'details': listing.get('highlightsObject', {}),
-            'images_count': listing.get('image_count'),
-            'posted_at': listing.get('posted_at'),
-            'inserted_date': listing.get('inserted_date'),
-            'is_active': listing.get('is_active'),
-            'verification_level': listing.get('verification_level'),
-            'seller': self.get_seller_info(listing),
-            'local_images_dir': None,  # Will be populated after image download
-            's3_image_path': None,  # Will be populated during processing
-        }
+        """
+        Extract complete listing object from API response.
+        Stores the entire listing object with all nested data while adding metadata fields.
+        """
+        # Create a copy of the listing to preserve all original data
+        property_data = dict(listing)
+        
+        # Add metadata fields for tracking
+        property_data['local_images_dir'] = None  # Will be populated after image download
+        property_data['s3_image_path'] = None  # Will be populated during processing
+        property_data['seller_info'] = self.get_seller_info(listing)  # Add seller info separately
+        
+        return property_data
