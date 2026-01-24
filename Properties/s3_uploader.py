@@ -52,7 +52,7 @@ class S3Uploader:
     def upload_properties_file(self, local_file_path: str, properties_data: dict) -> Tuple[bool, str]:
         """
         Upload properties data file to S3
-        Structure: opensooq-data/properties/{category_type}/{date}/properties.json
+        Structure: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/{subcategory}.json
         
         Args:
             local_file_path: Path to local JSON file (for reference)
@@ -62,7 +62,10 @@ class S3Uploader:
             Tuple of (success: bool, s3_key: str)
         """
         try:
-            date_str = datetime.now().strftime('%Y-%m-%d')
+            now = datetime.now()
+            year = now.year
+            month = f"{now.month:02d}"
+            day = f"{now.day:02d}"
             
             # Create uploads for each category type found in data
             for subcategory, cat_data in properties_data.items():
@@ -70,10 +73,11 @@ class S3Uploader:
                 properties = cat_data.get('properties', [])
                 if properties:
                     # Use cat1_label from category field for top-level category
-                    category_type = properties[0].get('category', {}).get('cat1_label', 'unknown')
+                    category_label = properties[0].get('category', {}).get('cat1_label', 'unknown')
                 else:
-                    category_type = 'unknown'
-                s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_type}/{date_str}/{subcategory.replace('/', '_')}.json"
+                    category_label = 'unknown'
+                
+                s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_label}/year={year}/month={month}/day={day}/{subcategory}.json"
                 
                 # Upload file
                 self.s3_client.put_object(
@@ -86,7 +90,7 @@ class S3Uploader:
                 
                 logger.info(f"Uploaded properties to S3: s3://{self.bucket_name}/{s3_key}")
             
-            return True, f"s3://{self.bucket_name}/{self.PROPERTIES_BASE_PATH}/{date_str}/"
+            return True, f"s3://{self.bucket_name}/{self.PROPERTIES_BASE_PATH}/"
             
         except ClientError as e:
             logger.error(f"Failed to upload properties to S3: {str(e)}")
@@ -94,6 +98,58 @@ class S3Uploader:
         except Exception as e:
             logger.error(f"Unexpected error uploading properties: {str(e)}")
             return False, str(e)
+    
+    def upload_images_to_s3(self, local_images_dir: str, s3_image_path: str, listing_id: int) -> Tuple[bool, int]:
+        """
+        Upload all images from a local directory to S3 with listing_id prefix
+        
+        Args:
+            local_images_dir: Local directory containing images
+            s3_image_path: S3 base path where images should be uploaded (e.g., opensooq-data/properties/category/year=.../month=.../day=.../images/subcategory/)
+            listing_id: Listing ID to use as filename prefix
+        
+        Returns:
+            Tuple of (success: bool, count_uploaded: int)
+        """
+        try:
+            from pathlib import Path
+            local_path = Path(local_images_dir)
+            
+            if not local_path.exists():
+                logger.warning(f"Local images directory not found: {local_images_dir}")
+                return True, 0
+            
+            uploaded_count = 0
+            
+            # Upload all image files with listing_id prefix
+            for image_file in local_path.glob('*'):
+                if image_file.is_file():
+                    # Create new filename with listing_id prefix
+                    # e.g., "275039437_image_001.jpg"
+                    image_name = image_file.name
+                    new_filename = f"{listing_id}_{image_name}"
+                    
+                    # Read file and upload
+                    with open(image_file, 'rb') as f:
+                        s3_key = f"{s3_image_path}{new_filename}"
+                        self.s3_client.put_object(
+                            Bucket=self.bucket_name,
+                            Key=s3_key,
+                            Body=f.read(),
+                            ServerSideEncryption='AES256'
+                        )
+                        uploaded_count += 1
+                        logger.debug(f"Uploaded image to S3: s3://{self.bucket_name}/{s3_key}")
+            
+            logger.info(f"Uploaded {uploaded_count} images to S3: s3://{self.bucket_name}/{s3_image_path}")
+            return True, uploaded_count
+            
+        except ClientError as e:
+            logger.error(f"Failed to upload images to S3: {str(e)}")
+            return False, 0
+        except Exception as e:
+            logger.error(f"Unexpected error uploading images: {str(e)}")
+            return False, 0
     
     def upload_members_file(self, members_data: dict) -> Tuple[bool, str]:
         """

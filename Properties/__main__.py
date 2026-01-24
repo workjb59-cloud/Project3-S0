@@ -6,7 +6,7 @@ import os
 import sys
 import logging
 import argparse
-from typing import Optional
+from typing import Optional, Tuple
 from datetime import datetime
 
 from scraper import PropertiesScraper
@@ -65,9 +65,54 @@ class PropertiesScraperWorkflow:
         logger.info(f"Successfully fetched details for {len(member_details)} members")
         return member_details
     
-    def process_and_save(self, all_listings: list, member_details: dict) -> tuple:
+    def download_listing_images(self, listings: list) -> dict:
+        """
+        Download images for all listings
+        Returns dict mapping listing_id to local images directory
+        """
+        logger.info("Downloading images for listings...")
+        
+        listings_with_images = {}
+        
+        for i, listing in enumerate(listings, 1):
+            listing_id = listing.get('listing_id')
+            if not listing_id:
+                continue
+            
+            # Skip if no images expected
+            if not listing.get('images_count') or listing.get('images_count') == 0:
+                continue
+            
+            try:
+                # Fetch listing detail to get full image data
+                listing_detail = self.scraper.fetch_listing_detail(listing_id)
+                if not listing_detail:
+                    logger.warning(f"Could not fetch listing detail for {listing_id}")
+                    continue
+                
+                # Download images
+                downloaded = self.scraper.download_listing_images(listing_id, listing_detail)
+                if downloaded:
+                    local_dir = str(self.scraper.images_dir / f"{listing_id}")
+                    listings_with_images[listing_id] = local_dir
+                    logger.info(f"Downloaded {len(downloaded)} images for listing {listing_id} ({i}/{len(listings)})")
+                
+            except Exception as e:
+                logger.warning(f"Error downloading images for listing {listing_id}: {str(e)}")
+        
+        logger.info(f"Downloaded images for {len(listings_with_images)} listings")
+        return listings_with_images
+    
+    def process_and_save(self, all_listings: list, member_details: dict, listings_with_images: dict = None) -> tuple:
         """Process listings and save to local files"""
         logger.info("Processing listings and member data...")
+        
+        # Add local_images_dir to listings if available
+        if listings_with_images:
+            for listing in all_listings:
+                listing_id = listing.get('listing_id')
+                if listing_id in listings_with_images:
+                    listing['local_images_dir'] = listings_with_images[listing_id]
         
         # Validate listings
         valid_count, invalid_count = DataValidator.validate_listings(all_listings)
@@ -85,8 +130,35 @@ class PropertiesScraperWorkflow:
         
         logger.info(f"Saved {prop_count} properties and {mem_count} members locally")
         
-        return properties_file, members_file
+        return properties_file, members_file, properties_data
     
+    def upload_images_to_s3(self, properties_data: dict, listings_with_images: dict) -> Tuple[int, int]:
+        """
+        Upload all listing images to S3
+        Returns tuple of (total_uploaded, total_failed)
+        """
+        logger.info("Uploading images to S3...")
+        
+        total_uploaded = 0
+        total_failed = 0
+        
+        for subcategory, cat_data in properties_data.items():
+            for prop in cat_data.get('properties', []):
+                listing_id = prop.get('listing_id')
+                s3_image_path = prop.get('s3_image_path')
+                
+                if listing_id in listings_with_images and s3_image_path:
+                    local_dir = listings_with_images[listing_id]
+                    success, count = self.s3_uploader.upload_images_to_s3(local_dir, s3_image_path, listing_id)
+                    
+                    if success:
+                        total_uploaded += count
+                    else:
+                        total_failed += 1
+        
+        logger.info(f"Uploaded images to S3: {total_uploaded} images, {total_failed} failed")
+        return total_uploaded, total_failed
+
     def upload_to_s3(self, properties_file: str, members_file: str) -> bool:
         """Upload processed files to S3"""
         logger.info("Uploading to S3...")
@@ -143,11 +215,25 @@ class PropertiesScraperWorkflow:
             # Fetch member details
             member_details = self.fetch_member_details(all_listings)
             
-            # Process and save locally
-            properties_file, members_file = self.process_and_save(all_listings, member_details)
+            # Download listing images
+            listings_with_images = self.download_listing_images(all_listings)
             
-            # Upload to S3
+            # Process and save locally
+            properties_file, members_file, properties_data = self.process_and_save(
+                all_listings, 
+                member_details,
+                listings_with_images
+            )
+            
+            # Upload data to S3
             upload_success = self.upload_to_s3(properties_file, members_file)
+            
+            # Upload images to S3
+            if listings_with_images:
+                images_uploaded, images_failed = self.upload_images_to_s3(
+                    properties_data,
+                    listings_with_images
+                )
             
             if upload_success:
                 logger.info("✓ Workflow completed successfully")

@@ -9,6 +9,9 @@ from datetime import datetime, timedelta
 import json
 from typing import List, Dict, Optional
 import logging
+from pathlib import Path
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -81,6 +84,89 @@ class PropertiesScraper:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         self.yesterday = (datetime.now() - timedelta(days=1)).date()
+        self.images_dir = Path("/tmp/opensooq_images")
+        self.images_dir.mkdir(exist_ok=True, parents=True)
+    
+    def download_image(self, image_url: str, save_path: str) -> bool:
+        """
+        Download a single image from URL to local path
+        Returns True if successful, False otherwise
+        """
+        try:
+            response = self.session.get(image_url, timeout=10)
+            response.raise_for_status()
+            
+            # Ensure directory exists
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(save_path, 'wb') as f:
+                f.write(response.content)
+            
+            logger.debug(f"Downloaded image to {save_path}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to download image {image_url}: {str(e)}")
+            return False
+    
+    def download_listing_images(self, listing_id: int, listing_detail: Dict) -> Dict[str, str]:
+        """
+        Download all images for a listing
+        Returns dict mapping image filenames to their local paths
+        
+        Args:
+            listing_id: OpenSooq listing ID
+            listing_detail: Listing detail data from fetch_listing_detail
+        
+        Returns:
+            Dict of {image_filename: local_path}
+        """
+        downloaded_images = {}
+        
+        try:
+            # Navigate through the listing detail structure to find images
+            images_data = []
+            
+            # Try multiple possible paths where images might be stored
+            if 'listing' in listing_detail and 'images' in listing_detail['listing']:
+                images_data = listing_detail['listing']['images']
+            elif 'images' in listing_detail:
+                images_data = listing_detail['images']
+            
+            if not images_data:
+                logger.debug(f"No images found for listing {listing_id}")
+                return {}
+            
+            # Create listing-specific directory
+            listing_images_dir = self.images_dir / f"{listing_id}"
+            listing_images_dir.mkdir(exist_ok=True, parents=True)
+            
+            # Download each image
+            for idx, image_info in enumerate(images_data, 1):
+                if isinstance(image_info, dict):
+                    image_url = image_info.get('original') or image_info.get('full') or image_info.get('url')
+                else:
+                    image_url = str(image_info)
+                
+                if not image_url:
+                    continue
+                
+                # Generate filename
+                file_ext = '.jpg'  # Default extension
+                if '.' in image_url.split('/')[-1]:
+                    file_ext = '.' + image_url.split('.')[-1].split('?')[0]
+                
+                filename = f"image_{idx:03d}{file_ext}"
+                save_path = listing_images_dir / filename
+                
+                if self.download_image(image_url, str(save_path)):
+                    downloaded_images[filename] = str(save_path)
+            
+            logger.info(f"Downloaded {len(downloaded_images)} images for listing {listing_id}")
+            
+        except Exception as e:
+            logger.warning(f"Error downloading images for listing {listing_id}: {str(e)}")
+        
+        return downloaded_images
     
     def is_yesterday_posting(self, posted_at_text: str) -> bool:
         """
@@ -274,4 +360,6 @@ class PropertiesScraper:
             'is_active': listing.get('is_active'),
             'verification_level': listing.get('verification_level'),
             'seller': self.get_seller_info(listing),
+            'local_images_dir': None,  # Will be populated after image download
+            's3_image_path': None,  # Will be populated during processing
         }

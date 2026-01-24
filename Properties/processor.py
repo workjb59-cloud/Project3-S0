@@ -23,10 +23,31 @@ class PropertiesProcessor:
         self.temp_dir.mkdir(exist_ok=True)
         self.processed_members = {}  # Track unique members by ID
         self.timestamp = datetime.now().isoformat()
+        self.current_date = datetime.now()
     
     def get_member_hash(self, member_id: int) -> str:
         """Generate hash for member to check if already processed"""
         return hashlib.md5(str(member_id).encode()).hexdigest()
+    
+    def build_s3_image_path(self, property_data: Dict) -> str:
+        """
+        Build S3 image base path for a property's images
+        Format: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/images/{subcategory}/
+        Individual images will be saved as {listing_id}_image_001.jpg, etc.
+        """
+        try:
+            category_label = property_data.get('category', {}).get('cat1_label', 'unknown')
+            subcategory_label = property_data.get('category', {}).get('cat2_label', 'unknown')
+            
+            year = self.current_date.year
+            month = f"{self.current_date.month:02d}"
+            day = f"{self.current_date.day:02d}"
+            
+            s3_path = f"opensooq-data/properties/{category_label}/year={year}/month={month}/day={day}/images/{subcategory_label}/"
+            return s3_path
+        except Exception as e:
+            logger.warning(f"Error building S3 image path: {str(e)}")
+            return None
     
     def extract_member_full_info(self, member_data: Dict) -> Dict:
         """
@@ -103,6 +124,10 @@ class PropertiesProcessor:
         result = {}
         
         for subcategory, properties in grouped_properties.items():
+            # Add s3_image_path to each property
+            for prop in properties:
+                prop['s3_image_path'] = self.build_s3_image_path(prop)
+            
             result[subcategory] = {
                 'count': len(properties),
                 'scraped_at': self.timestamp,
