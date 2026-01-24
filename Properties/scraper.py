@@ -380,7 +380,7 @@ class PropertiesScraper:
                     logger.debug(f"Processing listing {listing_id} from list endpoint")
                     
                     # Fetch detail page to get complete listing object with media, basic_info, etc.
-                    listing_detail = self.fetch_listing_detail(listing)
+                    listing_detail = self.fetch_listing_detail(listing_id)
                     
                     # Extract the complete listing object from detail page
                     listing['category_type'] = category_type
