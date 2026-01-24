@@ -129,56 +129,97 @@ class PropertiesScraper:
             # Navigate through the listing detail structure to find images
             images_data = []
             
+            # Log what we received
+            if listing_detail is None:
+                logger.warning(f"listing_detail is None for listing {listing_id}")
+            elif not isinstance(listing_detail, dict):
+                logger.warning(f"listing_detail is not a dict for listing {listing_id}, type: {type(listing_detail)}")
+            else:
+                logger.info(f"listing_detail keys for {listing_id}: {list(listing_detail.keys())}")
+            
             # Try multiple possible paths where images might be stored
             if listing_detail and isinstance(listing_detail, dict):
-                logger.debug(f"Listing detail keys: {list(listing_detail.keys())}")
-                if 'listing' in listing_detail and isinstance(listing_detail['listing'], dict):
+                # NEW: Check postData.listing.media (the actual structure)
+                if 'postData' in listing_detail:
+                    post_data = listing_detail['postData']
+                    if isinstance(post_data, dict) and 'listing' in post_data:
+                        listing_obj = post_data['listing']
+                        if isinstance(listing_obj, dict) and 'media' in listing_obj:
+                            images_data = listing_obj['media']
+                            logger.info(f"✓ Found images in postData['listing']['media']: {len(images_data)} items")
+                
+                # Fallback paths
+                if not images_data and 'listing' in listing_detail and isinstance(listing_detail['listing'], dict):
                     if 'images' in listing_detail['listing']:
                         images_data = listing_detail['listing']['images']
-                        logger.debug(f"Found images in listing_detail['listing']['images']: {len(images_data)} items")
+                        logger.info(f"✓ Found images in listing_detail['listing']['images']: {len(images_data)} items")
                 if not images_data and 'images' in listing_detail:
                     images_data = listing_detail['images']
-                    logger.debug(f"Found images in listing_detail['images']: {len(images_data)} items")
+                    logger.info(f"✓ Found images in listing_detail['images']: {len(images_data)} items")
                 if not images_data and 'serpApiResponse' in listing_detail:
                     api_response = listing_detail['serpApiResponse']
                     if isinstance(api_response, dict) and 'images' in api_response:
                         images_data = api_response['images']
-                        logger.debug(f"Found images in listing_detail['serpApiResponse']['images']: {len(images_data)} items")
+                        logger.info(f"✓ Found images in listing_detail['serpApiResponse']['images']: {len(images_data)} items")
             
             # Fallback to original listing if available and no images found
             if not images_data and listing and isinstance(listing, dict):
-                logger.debug(f"Checking original listing for images")
+                logger.info(f"Checking original listing for images, keys: {list(listing.keys())}")
                 if 'images' in listing:
                     images_data = listing.get('images', [])
-                    logger.debug(f"Found images in listing['images']: {len(images_data)} items")
+                    logger.info(f"✓ Found images in listing['images']: {len(images_data)} items")
                 elif 'image_urls' in listing:
                     images_data = listing.get('image_urls', [])
-                    logger.debug(f"Found images in listing['image_urls']: {len(images_data)} items")
+                    logger.info(f"✓ Found images in listing['image_urls']: {len(images_data)} items")
             
             if not images_data:
-                logger.debug(f"No images found for listing {listing_id}")
+                logger.warning(f"✗ No images found for listing {listing_id} - checked all possible locations")
+                # Log sample of what was in listing_detail for debugging
+                if listing_detail and isinstance(listing_detail, dict):
+                    logger.info(f"  Available top-level keys: {list(listing_detail.keys())}")
+                    if 'listing' in listing_detail:
+                        logger.info(f"  Keys in listing_detail['listing']: {list(listing_detail['listing'].keys()) if isinstance(listing_detail['listing'], dict) else 'not a dict'}")
                 return {}
             
             # Create listing-specific directory
             listing_images_dir = self.images_dir / f"{listing_id}"
             listing_images_dir.mkdir(exist_ok=True, parents=True)
             
-            logger.debug(f"Found {len(images_data)} images for listing {listing_id}")
+            logger.info(f"Found {len(images_data)} images for listing {listing_id}")
+            
+            # Log sample of first image to understand structure
+            if images_data:
+                logger.info(f"  Sample image data type: {type(images_data[0])}")
+                if isinstance(images_data[0], dict):
+                    logger.info(f"  Sample image keys: {list(images_data[0].keys())}")
             
             # Download each image
             for idx, image_info in enumerate(images_data, 1):
                 if isinstance(image_info, dict):
+                    # Get image URI and convert to full URL
+                    image_uri = image_info.get('uri')
+                    
                     # Try multiple keys where image URL might be
-                    image_url = (image_info.get('original') or 
+                    image_url = (image_uri or
+                                image_info.get('original') or 
                                 image_info.get('full') or 
                                 image_info.get('url') or
                                 image_info.get('src') or
                                 image_info.get('image_url'))
+                    
+                    # If we found a URI (relative path), convert to full URL
+                    if image_uri and not image_url.startswith('http'):
+                        # OpenSooq CDN URL format: https://opensooq-images.os-cdn.com/{uri}
+                        image_url = f"https://opensooq-images.os-cdn.com/{image_uri}"
+                        logger.debug(f"Converted URI to full URL: {image_url}")
+                    
+                    if not image_url:
+                        logger.info(f"  Image {idx} has no URL key - available keys: {list(image_info.keys())}")
                 else:
                     image_url = str(image_info)
                 
                 if not image_url:
-                    logger.debug(f"No URL found for image {idx} in listing {listing_id}")
+                    logger.warning(f"No URL found for image {idx} in listing {listing_id}")
                     continue
                 
                 # Generate filename
