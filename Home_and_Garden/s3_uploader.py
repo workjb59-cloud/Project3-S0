@@ -133,13 +133,16 @@ class HomeGardenS3Uploader:
             response = requests.get(image_url, timeout=10)
             response.raise_for_status()
             
-            # Determine file extension from URL
+            # Determine file extension and content type from URL
             if '.webp' in image_url:
                 ext = 'webp'
+                content_type = 'image/webp'
             elif '.png' in image_url:
                 ext = 'png'
+                content_type = 'image/png'
             else:
                 ext = 'jpg'
+                content_type = 'image/jpeg'
             
             # Generate S3 key
             partition = self._get_partition_path(date)
