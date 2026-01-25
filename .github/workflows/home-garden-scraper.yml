@@ -1,0 +1,68 @@
+name: OpenSooq Home and Garden Daily Scraper
+
+on:
+  schedule:
+    # Run every day at 12:00 AM UTC (adjust timezone as needed)
+    # For Kuwait timezone (UTC+3), this will be 03:00 AM Kuwait time
+    # Use 21:00 UTC for 12:00 AM Kuwait time (UTC+3)
+    - cron: '0 21 * * *'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Home and Garden Scraper
+        env:
+          AWS_S3_BUCKET_NAME: ${{ secrets.AWS_S3_BUCKET_NAME }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python -m Home\ and\ Garden
+
+      - name: Upload scraper logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: scraper-logs
+          path: logs/
+          retention-days: 7
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ Home and Garden scraper completed successfully"
+          echo "Scrape date: $(date -u +'%Y-%m-%d')"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Home and Garden scraper failed"
+          echo "Check logs for details"
+          exit 1
