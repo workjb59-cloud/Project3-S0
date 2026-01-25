@@ -210,7 +210,6 @@ class HomeGardenScraper:
             # Extract processed data
             listing_details = ListingProcessor.extract_listing_details(detail_data)
             member_info = ListingProcessor.extract_member_info(detail_data)
-            property_info = ListingProcessor.extract_property_info(detail_data)
             
             if not listing_details or not member_info:
                 logger.warning(f"Failed to extract details for listing {listing_id}")
@@ -226,7 +225,7 @@ class HomeGardenScraper:
                     'index': idx
                 })
             
-            # Upload listing JSON
+            # Upload listing JSON (contains all data including member_id)
             listing_details['scrape_date'] = scrape_date.isoformat()
             listing_json_path = self.s3_uploader.upload_listing_json(
                 listing_details,
@@ -237,32 +236,16 @@ class HomeGardenScraper:
             )
             logger.info(f"Uploaded listing JSON for {listing_id}")
             
-            # Upload property JSON
-            property_info['scrape_date'] = scrape_date.isoformat()
-            property_info['member_id'] = member_info.get('member_id')
-            self.s3_uploader.upload_property_json(
-                property_info,
-                main_category,
-                sub_category,
-                scrape_date,
-                str(listing_id)
-            )
-            logger.info(f"Uploaded property JSON for {listing_id}")
-            
             # Upload images
             image_paths = []
-            base_image_url = "https://opensooq-images.os-cdn.com"
             
             for image_data in images_data:
                 image_uri = image_data.get('uri')
                 if not image_uri:
                     continue
                 
-                # Construct full image URL
-                image_url = f"{base_image_url}/{image_uri}"
-                
                 s3_image_path = self.s3_uploader.upload_image(
-                    image_url,
+                    image_uri,  # Pass just the URI, s3_uploader will construct full URL
                     main_category,
                     sub_category,
                     scrape_date,

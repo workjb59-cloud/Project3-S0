@@ -124,15 +124,19 @@ class HomeGardenS3Uploader:
             S3 path where the image was uploaded, or None if failed
         """
         try:
+            # Construct proper image URL if needed (convert to webp preview format)
+            if 'previews' not in image_url:
+                # Convert uri to full CDN URL with preview
+                image_url = f"https://opensooq-images.os-cdn.com/previews/300x0/{image_url}.webp"
+            
             # Download image
             response = requests.get(image_url, timeout=10)
             response.raise_for_status()
             
-            # Determine file extension
-            content_type = response.headers.get('content-type', 'image/jpeg')
-            if 'webp' in content_type:
+            # Determine file extension from URL
+            if '.webp' in image_url:
                 ext = 'webp'
-            elif 'png' in content_type:
+            elif '.png' in image_url:
                 ext = 'png'
             else:
                 ext = 'jpg'
