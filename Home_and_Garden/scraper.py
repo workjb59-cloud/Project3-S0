@@ -420,9 +420,9 @@ def main():
     """Main entry point"""
     try:
         # Get AWS credentials from environment
-        bucket_name = os.getenv('AWS_S3_BUCKET_NAME')
-        aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
-        aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        bucket_name = os.getenv('AWS_S3_BUCKET')
+        aws_access_key = os.getenv('AWS_ACCESS_KEY')
+        aws_secret_key = os.getenv('AWS_SECRET_KEY')
         aws_region = os.getenv('AWS_REGION', 'us-east-1')
         
         if not all([bucket_name, aws_access_key, aws_secret_key]):
