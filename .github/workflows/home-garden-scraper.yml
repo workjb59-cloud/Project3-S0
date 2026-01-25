@@ -1,4 +1,4 @@
-name: OpenSooq Home and Garden Daily Scraper
+name: Home and Garden
 
 on:
   schedule:
