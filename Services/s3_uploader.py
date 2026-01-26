@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime, date
 from botocore.exceptions import ClientError
+import requests
+from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -233,6 +235,66 @@ class ServicesS3Uploader:
         logger.info(f"Upload complete. Stats: {stats}")
         
         return success
+
+    def upload_image(self, image_url: str, category: str, subcategory: str, 
+                    target_date: date, listing_id: int, image_index: int) -> Optional[str]:
+        """
+        Download and upload image to S3
+        
+        Args:
+            image_url: Image URI or full URL
+            category: Main category name
+            subcategory: Subcategory name
+            target_date: Date for partitioning
+            listing_id: Listing ID
+            image_index: Image index (for multiple images)
+        
+        Returns:
+            S3 path where image was uploaded, or None if failed
+        """
+        try:
+            # Build full image URL if needed
+            if not image_url.startswith('http'):
+                # URI format: 2b/8a/2b8a59fc75894e0f474b443754a6767cb6888b8f8bd7e8e8e321a9dceed77dec.jpg
+                image_url = f"https://opensooq-images.os-cdn.com/previews/800x0/{image_url}"
+            
+            # Download image
+            response = requests.get(image_url, timeout=15)
+            response.raise_for_status()
+            
+            # Determine file extension
+            if '.webp' in image_url:
+                ext = 'webp'
+                content_type = 'image/webp'
+            elif '.png' in image_url:
+                ext = 'png'
+                content_type = 'image/png'
+            else:
+                ext = 'jpg'
+                content_type = 'image/jpeg'
+            
+            # Build S3 key
+            year = target_date.year
+            month = f"{target_date.month:02d}"
+            day = f"{target_date.day:02d}"
+            safe_category = category.replace('/', '_').replace(' ', '_')
+            safe_subcategory = subcategory.replace('/', '_').replace(' ', '_')
+            
+            s3_key = f"opensooq-data/services/year={year}/month={month}/day={day}/images/{safe_category}/{safe_subcategory}/{listing_id}_{image_index}.{ext}"
+            
+            # Upload to S3
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=response.content,
+                ContentType=content_type
+            )
+            
+            logger.info(f"Uploaded image to {s3_key}")
+            return s3_key
+        except Exception as e:
+            logger.warning(f"Failed to upload image {image_url}: {str(e)}")
+            return None
 
     def list_files(self, prefix: str) -> List[str]:
         """

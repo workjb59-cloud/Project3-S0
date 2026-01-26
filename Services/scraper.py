@@ -286,6 +286,28 @@ class ServicesScraper:
                 detail_data = self.get_listing_detail(listing_id)
                 
                 if detail_data:
+                    # Download images
+                    s3_image_paths = []
+                    media = detail_data.get('listing', {}).get('media', [])
+                    
+                    for idx, media_item in enumerate(media):
+                        if media_item.get('mime_type', '').startswith('image/'):
+                            image_uri = media_item.get('uri', '')
+                            if image_uri:
+                                s3_path = self.s3_uploader.upload_image(
+                                    image_url=image_uri,
+                                    category=category_label,
+                                    subcategory=subcategory_label,
+                                    target_date=self.target_date,
+                                    listing_id=listing_id,
+                                    image_index=idx
+                                )
+                                if s3_path:
+                                    s3_image_paths.append(s3_path)
+                    
+                    # Add s3_image_paths to detail data
+                    detail_data['s3_image_paths'] = s3_image_paths
+                    
                     # Add to collection
                     all_listings.append(detail_data)
                     

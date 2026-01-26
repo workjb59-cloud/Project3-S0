@@ -65,12 +65,13 @@ class ServicesProcessor:
             return False
     
     @staticmethod
-    def clean_listing_data(listing: Dict) -> Dict:
+    def clean_listing_data(listing: Dict, s3_image_paths: List[str] = None) -> Dict:
         """
         Clean and normalize listing data
         
         Args:
             listing: Raw listing data
+            s3_image_paths: List of S3 paths for uploaded images
         
         Returns:
             Cleaned listing data
@@ -88,6 +89,7 @@ class ServicesProcessor:
             'posted_date': listing.get('posted_date'),
             'publish_date': listing.get('publish_date'),
             'media': listing.get('media', []),
+            's3_image_paths': s3_image_paths or [],
             'basic_info': listing.get('basic_info', []),
             'post_url': listing.get('post_url'),
             'member_id': listing.get('member_id'),
@@ -139,7 +141,7 @@ class ServicesDataManager:
         Args:
             category: Main category name
             subcategory: Subcategory name
-            listings: List of listing data dicts
+            listings: List of listing data dicts (with s3_image_paths)
         """
         if category not in self.subcategory_data:
             self.subcategory_data[category] = {}
@@ -149,7 +151,11 @@ class ServicesDataManager:
         
         # Clean and add listings
         for listing_data in listings:
-            cleaned_listing = self.processor.clean_listing_data(listing_data.get('listing', {}))
+            s3_image_paths = listing_data.get('s3_image_paths', [])
+            cleaned_listing = self.processor.clean_listing_data(
+                listing_data.get('listing', {}),
+                s3_image_paths
+            )
             cleaned_seller = self.processor.clean_seller_data(listing_data.get('seller', {}))
             
             self.subcategory_data[category][subcategory].append({
