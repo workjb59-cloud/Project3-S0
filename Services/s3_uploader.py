@@ -255,8 +255,9 @@ class ServicesS3Uploader:
         try:
             # Build full image URL if needed
             if not image_url.startswith('http'):
-                # URI format: 2b/8a/2b8a59fc75894e0f474b443754a6767cb6888b8f8bd7e8e8e321a9dceed77dec.jpg
-                image_url = f"https://opensooq-images.os-cdn.com/previews/800x0/{image_url}"
+                # URI format: b6/f7/b6f78011594006b0ffcbda0659a4c6ee6167ef989298eb336a8224738f691691.jpg
+                # Construct URL: https://opensooq-images.os-cdn.com/previews/0x720/{uri}.webp
+                image_url = f"https://opensooq-images.os-cdn.com/previews/0x720/{image_url}.webp"
             
             # Download image
             response = requests.get(image_url, timeout=15)
