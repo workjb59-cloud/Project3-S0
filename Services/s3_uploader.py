@@ -66,13 +66,13 @@ class ServicesS3Uploader:
         day = f"{target_date.day:02d}"
         
         if is_info:
-            # Member info path: info-json/info.json (at root level)
-            return "info-json/info.json"
+            # Member info path: opensooq-data/info-json/info.json (at root level of opensooq-data)
+            return "opensooq-data/info-json/info.json"
         else:
-            # Listings path: services/year=2026/month=01/day=25/json-files/Category/subcategory.json
+            # Listings path: opensooq-data/services/year=2026/month=01/day=25/json-files/Category/subcategory.json
             safe_category = category.replace('/', '_').replace(' ', '_')
             safe_subcategory = subcategory.replace('/', '_').replace(' ', '_')
-            return f"{base_folder}/year={year}/month={month}/day={day}/json-files/{safe_category}/{safe_subcategory}.json"
+            return f"opensooq-data/{base_folder}/year={year}/month={month}/day={day}/json-files/{safe_category}/{safe_subcategory}.json"
 
     def upload_json(self, data: Dict or List, s3_key: str) -> bool:
         """
