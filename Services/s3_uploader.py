@@ -182,10 +182,16 @@ class ServicesS3Uploader:
         existing_data = []
         if self.check_if_exists(s3_key):
             logger.info(f"Found existing member info file, downloading for merge...")
-            existing_data = self.download_json(s3_key) or []
+            downloaded = self.download_json(s3_key)
+            # Ensure downloaded data is a list
+            if isinstance(downloaded, list):
+                existing_data = downloaded
+            elif downloaded:
+                logger.warning(f"Existing data is not a list, resetting to empty list")
+                existing_data = []
         
         # Merge with existing data (incremental)
-        existing_ids = {member.get('id') for member in existing_data}
+        existing_ids = {member.get('id') for member in existing_data if isinstance(member, dict)}
         new_members = [m for m in member_data if m.get('id') not in existing_ids]
         
         if new_members:
