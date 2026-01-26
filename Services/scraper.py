@@ -217,7 +217,12 @@ class ServicesScraper:
         Returns:
             Dict with member info, or None if failed
         """
-        # Build full URL
+        # Build full URL - member_link already contains /ar/ prefix
+        # member_link format: /ar/mid/member-xxxxx
+        if member_link.startswith('/ar/'):
+            # Remove /ar/ prefix since BASE_URL already includes it
+            member_link = member_link[3:]  # Remove '/ar'
+        
         full_url = f"{BASE_URL}{member_link}"
         html = self.fetch_page(full_url)
         
