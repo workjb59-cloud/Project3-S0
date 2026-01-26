@@ -87,13 +87,13 @@ class ServicesScraper:
             return []
         
         try:
-            json_data = extract_json_from_html(html)
-            if not json_data:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
                 logger.error("Failed to extract JSON from Services page")
                 return []
             
             # Extract categories from facets
-            facets = json_data.get('props', {}).get('pageProps', {}).get('serpApiResponse', {}).get('facets', {})
+            facets = page_props.get('serpApiResponse', {}).get('facets', {})
             categories = facets.get('items', [])
             
             logger.info(f"Found {len(categories)} main service categories")
@@ -122,13 +122,13 @@ class ServicesScraper:
             return []
         
         try:
-            json_data = extract_json_from_html(html)
-            if not json_data:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
                 logger.error(f"Failed to extract JSON from {category_label}")
                 return []
             
             # Extract subcategories from facets
-            facets = json_data.get('props', {}).get('pageProps', {}).get('serpApiResponse', {}).get('facets', {})
+            facets = page_props.get('serpApiResponse', {}).get('facets', {})
             subcategories = facets.get('items', [])
             
             logger.info(f"Found {len(subcategories)} subcategories for {category_label}")
@@ -159,12 +159,12 @@ class ServicesScraper:
             return [], {}
         
         try:
-            json_data = extract_json_from_html(html)
-            if not json_data:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
                 return [], {}
             
             # Extract listings
-            serp_data = json_data.get('props', {}).get('pageProps', {}).get('serpApiResponse', {})
+            serp_data = page_props.get('serpApiResponse', {})
             listings_data = serp_data.get('listings', {})
             listings = listings_data.get('items', [])
             metadata = listings_data.get('meta', {})
@@ -192,12 +192,12 @@ class ServicesScraper:
             return None
         
         try:
-            json_data = extract_json_from_html(html)
-            if not json_data:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
                 return None
             
             # Extract post data
-            post_data = json_data.get('props', {}).get('pageProps', {}).get('postData', {})
+            post_data = page_props.get('postData', {})
             
             return {
                 'listing': post_data.get('listing', {}),
@@ -225,12 +225,12 @@ class ServicesScraper:
             return None
         
         try:
-            json_data = extract_json_from_html(html)
-            if not json_data:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
                 return None
             
             # Extract member info
-            user_info = json_data.get('props', {}).get('pageProps', {}).get('userInfo', {})
+            user_info = page_props.get('userInfo', {})
             member_data = user_info.get('member', {})
             
             return member_data
