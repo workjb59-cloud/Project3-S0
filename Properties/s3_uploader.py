@@ -1,26 +1,24 @@
 """
 S3 Uploader for Properties Data
-Handles uploading processed JSON files to AWS S3
+Handles uploading JSON data to AWS S3 with date partitioning
 """
 
 import json
 import logging
 import boto3
 from pathlib import Path
-from typing import Tuple, Optional
-from datetime import datetime
+from typing import Optional, Dict, List, Union
+from datetime import datetime, date
 from botocore.exceptions import ClientError
+import requests
+from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class S3Uploader:
-    """Handles S3 operations for uploading property and member data"""
-    
-    # S3 folder structure constants
-    PROPERTIES_BASE_PATH = "opensooq-data/properties"
-    INFO_BASE_PATH = "opensooq-data/info-json"
+class PropertiesS3Uploader:
+    """Handles S3 operations for properties listings and member data"""
     
     def __init__(self, bucket_name: str, aws_access_key: str, aws_secret_key: str, region: str = 'us-east-1'):
         """
@@ -48,243 +46,278 @@ class S3Uploader:
         except ClientError as e:
             logger.error(f"Failed to connect to S3 bucket {bucket_name}: {str(e)}")
             raise
-    
-    def upload_properties_file(self, local_file_path: str, properties_data: dict) -> Tuple[bool, str]:
+
+    @staticmethod
+    def build_s3_key(base_folder: str, target_date: date, category: str = None, 
+                     subcategory: str = None, is_info: bool = False) -> str:
         """
-        Upload properties data file to S3
-        Structure: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/json files/{subcategory}.json
+        Build S3 key with date partitioning
         
         Args:
-            local_file_path: Path to local JSON file (for reference)
-            properties_data: Dictionary containing properties organized by subcategory
+            base_folder: Base folder name (e.g., 'properties')
+            target_date: Date for partitioning
+            category: Category name (optional)
+            subcategory: Subcategory name (optional)
+            is_info: Whether this is member info data
         
         Returns:
-            Tuple of (success: bool, s3_key: str)
+            S3 key path
         """
-        try:
-            now = datetime.now()
-            year = now.year
-            month = f"{now.month:02d}"
-            day = f"{now.day:02d}"
-            
-            # Create uploads for each category type found in data
-            for subcategory, cat_data in properties_data.items():
-                # Extract category type from first property if available
-                properties = cat_data.get('properties', [])
-                if properties:
-                    # Use cat1_label from category field for top-level category
-                    category_label = properties[0].get('category', {}).get('cat1_label', 'unknown')
-                else:
-                    category_label = 'unknown'
-                
-                s3_key = f"{self.PROPERTIES_BASE_PATH}/{category_label}/year={year}/month={month}/day={day}/json files/{subcategory}.json"
-                
-                # Upload file
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=s3_key,
-                    Body=json.dumps(cat_data, ensure_ascii=False, indent=2),
-                    ContentType='application/json',
-                    ServerSideEncryption='AES256'
-                )
-                
-                logger.info(f"Uploaded properties to S3: s3://{self.bucket_name}/{s3_key}")
-            
-            return True, f"s3://{self.bucket_name}/{self.PROPERTIES_BASE_PATH}/"
-            
-        except ClientError as e:
-            logger.error(f"Failed to upload properties to S3: {str(e)}")
-            return False, str(e)
-        except Exception as e:
-            logger.error(f"Unexpected error uploading properties: {str(e)}")
-            return False, str(e)
-    
-    def upload_images_to_s3(self, local_images_dir: str, s3_image_path: str, listing_id: int) -> Tuple[bool, int]:
+        year = target_date.year
+        month = f"{target_date.month:02d}"
+        day = f"{target_date.day:02d}"
+        
+        if is_info:
+            # Member info path: opensooq-data/info-json/info.json (at root level of opensooq-data)
+            return "opensooq-data/info-json/info.json"
+        else:
+            # Listings path: opensooq-data/properties/year=2026/month=01/day=25/json-files/Category/subcategory.json
+            safe_category = category.replace('/', '_').replace(' ', '_')
+            safe_subcategory = subcategory.replace('/', '_').replace(' ', '_')
+            return f"opensooq-data/{base_folder}/year={year}/month={month}/day={day}/json-files/{safe_category}/{safe_subcategory}.json"
+
+    def upload_json(self, data: Union[Dict, List], s3_key: str) -> bool:
         """
-        Upload all images from a local directory to S3 with listing_id prefix
+        Upload JSON data to S3
         
         Args:
-            local_images_dir: Local directory containing images
-            s3_image_path: S3 base path where images should be uploaded (e.g., opensooq-data/properties/category/year=.../month=.../day=.../images/subcategory/)
-            listing_id: Listing ID to use as filename prefix
+            data: Data to upload (dict or list)
+            s3_key: S3 key path
         
         Returns:
-            Tuple of (success: bool, count_uploaded: int)
+            True if successful, False otherwise
         """
         try:
-            from pathlib import Path
-            local_path = Path(local_images_dir)
+            json_data = json.dumps(data, ensure_ascii=False, indent=2)
             
-            if not local_path.exists():
-                logger.warning(f"Local images directory not found: {local_images_dir}")
-                return True, 0
-            
-            uploaded_count = 0
-            
-            # Upload all image files with listing_id prefix
-            for image_file in local_path.glob('*'):
-                if image_file.is_file():
-                    # Create new filename with listing_id prefix
-                    # e.g., "275039437_image_001.jpg"
-                    image_name = image_file.name
-                    new_filename = f"{listing_id}_{image_name}"
-                    
-                    # Read file and upload
-                    with open(image_file, 'rb') as f:
-                        s3_key = f"{s3_image_path}{new_filename}"
-                        self.s3_client.put_object(
-                            Bucket=self.bucket_name,
-                            Key=s3_key,
-                            Body=f.read(),
-                            ServerSideEncryption='AES256'
-                        )
-                        uploaded_count += 1
-                        logger.debug(f"Uploaded image to S3: s3://{self.bucket_name}/{s3_key}")
-            
-            logger.info(f"Uploaded {uploaded_count} images to S3: s3://{self.bucket_name}/{s3_image_path}")
-            return True, uploaded_count
-            
-        except ClientError as e:
-            logger.error(f"Failed to upload images to S3: {str(e)}")
-            return False, 0
-        except Exception as e:
-            logger.error(f"Unexpected error uploading images: {str(e)}")
-            return False, 0
-    
-    def upload_members_file(self, members_data: dict) -> Tuple[bool, str]:
-        """
-        Upload members/member info data to S3
-        Structure: opensooq-data/info-json/info.json (incremental)
-        
-        Args:
-            members_data: Dictionary containing member information
-        
-        Returns:
-            Tuple of (success: bool, s3_key: str)
-        """
-        try:
-            s3_key = f"{self.INFO_BASE_PATH}/info.json"
-            
-            # Check if file already exists and merge if needed
-            existing_data = self._load_existing_members_file(s3_key)
-            
-            if existing_data:
-                # Merge new members with existing ones (by member_id)
-                merged_data = self._merge_members_data(existing_data, members_data)
-            else:
-                merged_data = members_data
-            
-            # Upload merged file
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=s3_key,
-                Body=json.dumps(merged_data, ensure_ascii=False, indent=2),
+                Body=json_data.encode('utf-8'),
                 ContentType='application/json',
-                ServerSideEncryption='AES256'
+                ContentEncoding='utf-8'
             )
             
-            logger.info(f"Uploaded members info to S3: s3://{self.bucket_name}/{s3_key}")
-            logger.info(f"Total unique members: {merged_data.get('count', 0)}")
-            
-            return True, f"s3://{self.bucket_name}/{s3_key}"
-            
-        except ClientError as e:
-            logger.error(f"Failed to upload members to S3: {str(e)}")
-            return False, str(e)
-        except Exception as e:
-            logger.error(f"Unexpected error uploading members: {str(e)}")
-            return False, str(e)
-    
-    def _load_existing_members_file(self, s3_key: str) -> Optional[dict]:
-        """Load existing members file from S3"""
-        try:
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
-            content = response['Body'].read().decode('utf-8')
-            return json.loads(content)
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                logger.info(f"No existing members file found at {s3_key}")
-                return None
-            else:
-                logger.warning(f"Error loading existing members file: {str(e)}")
-                return None
-        except Exception as e:
-            logger.warning(f"Error reading existing members file: {str(e)}")
-            return None
-    
-    def _merge_members_data(self, existing: dict, new: dict) -> dict:
-        """
-        Merge new member data with existing data, avoiding duplicates
-        Updates existing members with new data if timestamps are newer
-        """
-        existing_members = {m['member_id']: m for m in existing.get('members', [])}
-        new_members = {m['member_id']: m for m in new.get('members', [])}
-        
-        # Merge: new data overwrites existing data for same member_id
-        merged_members = {**existing_members, **new_members}
-        
-        return {
-            'count': len(merged_members),
-            'scraped_at': new.get('scraped_at'),
-            'members': sorted(
-                merged_members.values(),
-                key=lambda x: x.get('member_id', 0)
-            ),
-        }
-    
-    def upload_files(self, properties_file: str, members_file: str) -> Tuple[bool, dict]:
-        """
-        Upload both properties and members files to S3
-        
-        Args:
-            properties_file: Path to properties JSON file
-            members_file: Path to members JSON file
-        
-        Returns:
-            Tuple of (success: bool, upload_results: dict)
-        """
-        results = {
-            'properties': {'success': False, 'location': None},
-            'members': {'success': False, 'location': None},
-        }
-        
-        try:
-            # Load properties data
-            with open(properties_file, 'r', encoding='utf-8') as f:
-                properties_data = json.load(f)
-            
-            # Load members data
-            with open(members_file, 'r', encoding='utf-8') as f:
-                members_data = json.load(f)
-            
-            # Upload properties
-            prop_success, prop_location = self.upload_properties_file(properties_file, properties_data)
-            results['properties']['success'] = prop_success
-            results['properties']['location'] = prop_location
-            
-            # Upload members
-            mem_success, mem_location = self.upload_members_file(members_data)
-            results['members']['success'] = mem_success
-            results['members']['location'] = mem_location
-            
-            return prop_success and mem_success, results
-            
-        except FileNotFoundError as e:
-            logger.error(f"File not found: {str(e)}")
-            return False, results
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON file: {str(e)}")
-            return False, results
-        except Exception as e:
-            logger.error(f"Unexpected error during upload: {str(e)}")
-            return False, results
-    
-    def test_connection(self) -> bool:
-        """Test S3 connection"""
-        try:
-            self.s3_client.head_bucket(Bucket=self.bucket_name)
-            logger.info(f"S3 connection test successful for bucket: {self.bucket_name}")
+            logger.info(f"Successfully uploaded to s3://{self.bucket_name}/{s3_key}")
             return True
         except ClientError as e:
-            logger.error(f"S3 connection test failed: {str(e)}")
+            logger.error(f"Error uploading {s3_key}: {str(e)}")
             return False
+
+    def check_if_exists(self, s3_key: str) -> bool:
+        """
+        Check if a file exists in S3
+        
+        Args:
+            s3_key: S3 key path
+        
+        Returns:
+            True if exists, False otherwise
+        """
+        try:
+            self.s3_client.head_object(Bucket=self.bucket_name, Key=s3_key)
+            return True
+        except ClientError:
+            return False
+
+    def download_json(self, s3_key: str) -> Optional[Union[Dict, List]]:
+        """
+        Download and parse JSON from S3
+        
+        Args:
+            s3_key: S3 key path
+        
+        Returns:
+            Parsed JSON data or None if failed
+        """
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+            json_data = response['Body'].read().decode('utf-8')
+            return json.loads(json_data)
+        except ClientError as e:
+            logger.warning(f"Error downloading {s3_key}: {str(e)}")
+            return None
+
+    def upload_subcategory_data(self, category: str, subcategory: str, listings: List[Dict], 
+                                target_date: date) -> bool:
+        """
+        Upload subcategory listings to S3
+        
+        Args:
+            category: Main category name
+            subcategory: Subcategory name
+            listings: List of listings data
+            target_date: Target date for partitioning
+        
+        Returns:
+            True if successful
+        """
+        s3_key = self.build_s3_key(
+            base_folder='properties',
+            target_date=target_date,
+            category=category,
+            subcategory=subcategory,
+            is_info=False
+        )
+        
+        logger.info(f"Uploading {len(listings)} listings to {s3_key}")
+        return self.upload_json(listings, s3_key)
+
+    def upload_member_info(self, member_data: List[Dict], target_date: date) -> bool:
+        """
+        Upload member info to S3 (incremental)
+        
+        Args:
+            member_data: List of member information dicts
+            target_date: Target date for partitioning
+        
+        Returns:
+            True if successful
+        """
+        s3_key = self.build_s3_key(
+            base_folder='properties',
+            target_date=target_date,
+            is_info=True
+        )
+        
+        # Check if file exists
+        existing_data = []
+        if self.check_if_exists(s3_key):
+            logger.info(f"Found existing member info file, downloading for merge...")
+            downloaded = self.download_json(s3_key)
+            # Ensure downloaded data is a list
+            if isinstance(downloaded, list):
+                existing_data = downloaded
+            elif downloaded:
+                logger.warning(f"Existing data is not a list, resetting to empty list")
+                existing_data = []
+        
+        # Merge with existing data (incremental)
+        existing_ids = {member.get('id') for member in existing_data if isinstance(member, dict)}
+        new_members = [m for m in member_data if m.get('id') not in existing_ids]
+        
+        if new_members:
+            combined_data = existing_data + new_members
+            logger.info(f"Uploading {len(new_members)} new members (total: {len(combined_data)})")
+            return self.upload_json(combined_data, s3_key)
+        else:
+            logger.info("No new members to upload")
+            return True
+
+    def upload_all_data(self, data_manager, target_date: date) -> bool:
+        """
+        Upload all scraped data to S3
+        
+        Args:
+            data_manager: PropertiesDataManager instance with scraped data
+            target_date: Target date for partitioning
+        
+        Returns:
+            True if all uploads successful
+        """
+        success = True
+        
+        # Upload subcategory data
+        subcategory_data = data_manager.get_subcategory_data()
+        for category, subcategories in subcategory_data.items():
+            for subcategory, listings in subcategories.items():
+                if not self.upload_subcategory_data(category, subcategory, listings, target_date):
+                    success = False
+        
+        # Upload member info (incremental)
+        member_info = data_manager.get_member_info_list()
+        if member_info:
+            if not self.upload_member_info(member_info, target_date):
+                success = False
+        
+        # Log statistics
+        stats = data_manager.get_stats()
+        logger.info(f"Upload complete. Stats: {stats}")
+        
+        return success
+
+    def upload_image(self, image_url: str, category: str, subcategory: str, 
+                    target_date: date, listing_id: int, image_index: int) -> Optional[str]:
+        """
+        Download and upload image to S3
+        
+        Args:
+            image_url: Image URI or full URL
+            category: Main category name
+            subcategory: Subcategory name
+            target_date: Date for partitioning
+            listing_id: Listing ID
+            image_index: Image index (for multiple images)
+        
+        Returns:
+            S3 path where image was uploaded, or None if failed
+        """
+        try:
+            # Build full image URL if needed
+            if not image_url.startswith('http'):
+                # URI format: b6/f7/b6f78011594006b0ffcbda0659a4c6ee6167ef989298eb336a8224738f691691.jpg
+                # Construct URL: https://opensooq-images.os-cdn.com/previews/0x720/{uri}.webp
+                image_url = f"https://opensooq-images.os-cdn.com/previews/0x720/{image_url}.webp"
+            
+            # Download image
+            response = requests.get(image_url, timeout=15)
+            response.raise_for_status()
+            
+            # Determine file extension
+            if '.webp' in image_url:
+                ext = 'webp'
+                content_type = 'image/webp'
+            elif '.png' in image_url:
+                ext = 'png'
+                content_type = 'image/png'
+            else:
+                ext = 'jpg'
+                content_type = 'image/jpeg'
+            
+            # Build S3 key
+            year = target_date.year
+            month = f"{target_date.month:02d}"
+            day = f"{target_date.day:02d}"
+            safe_category = category.replace('/', '_').replace(' ', '_')
+            safe_subcategory = subcategory.replace('/', '_').replace(' ', '_')
+            
+            s3_key = f"opensooq-data/properties/year={year}/month={month}/day={day}/images/{safe_category}/{safe_subcategory}/{listing_id}_{image_index}.{ext}"
+            
+            # Upload to S3
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=response.content,
+                ContentType=content_type
+            )
+            
+            logger.info(f"Uploaded image to {s3_key}")
+            return s3_key
+        except Exception as e:
+            logger.warning(f"Failed to upload image {image_url}: {str(e)}")
+            return None
+
+    def list_files(self, prefix: str) -> List[str]:
+        """
+        List files in S3 bucket with given prefix
+        
+        Args:
+            prefix: S3 key prefix
+        
+        Returns:
+            List of S3 keys
+        """
+        try:
+            response = self.s3_client.list_objects_v2(
+                Bucket=self.bucket_name,
+                Prefix=prefix
+            )
+            
+            files = []
+            if 'Contents' in response:
+                files = [obj['Key'] for obj in response['Contents']]
+            
+            return files
+        except ClientError as e:
+            logger.error(f"Error listing files with prefix {prefix}: {str(e)}")
+            return []

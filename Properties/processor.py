@@ -1,263 +1,215 @@
 """
-Properties Data Processor
-Structures scraped property data and member information into separate JSON files
+Data Processor for Properties Listings
+Processes raw API data and prepares for S3 upload
 """
 
 import json
 import logging
-from datetime import datetime
-from typing import Dict, List, Tuple
-from pathlib import Path
-import hashlib
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class PropertiesProcessor:
-    """Processes and structures property data"""
+    """Processes listing data and extracts relevant information"""
     
-    def __init__(self, temp_dir: str = "/tmp"):
-        """Initialize processor with temporary directory for staging"""
-        self.temp_dir = Path(temp_dir)
-        self.temp_dir.mkdir(exist_ok=True)
-        self.processed_members = {}  # Track unique members by ID
-        self.timestamp = datetime.now().isoformat()
-        self.current_date = datetime.now()
-    
-    def get_member_hash(self, member_id: int) -> str:
-        """Generate hash for member to check if already processed"""
-        return hashlib.md5(str(member_id).encode()).hexdigest()
-    
-    def build_s3_image_path(self, property_data: Dict) -> str:
+    @staticmethod
+    def is_yesterday_ad(posted_at: str) -> bool:
         """
-        Build S3 image base path for a property's images
-        Format: opensooq-data/properties/{category_label}/year=YYYY/month=MM/day=DD/images/{subcategory}/
-        Individual images will be saved as {listing_id}_image_001.jpg, etc.
-        """
-        try:
-            category_label = property_data.get('category', {}).get('cat1_label', 'unknown')
-            subcategory_label = property_data.get('category', {}).get('cat2_label', 'unknown')
-            
-            year = self.current_date.year
-            month = f"{self.current_date.month:02d}"
-            day = f"{self.current_date.day:02d}"
-            
-            s3_path = f"opensooq-data/properties/{category_label}/year={year}/month={month}/day={day}/images/{subcategory_label}/"
-            return s3_path
-        except Exception as e:
-            logger.warning(f"Error building S3 image path: {str(e)}")
-            return None
-    
-    def extract_member_full_info(self, member_data: Dict) -> Dict:
-        """
-        Extract full member information from member profile data
-        This includes ratings, tags, and all detailed information
-        """
-        if not member_data:
-            return {}
-        # Debug: log the structure of member_data
-        logger.debug(f"Raw member_data: {json.dumps(member_data, ensure_ascii=False)[:500]}")
-        # Try the original path
-        member_info = member_data.get('info', {}).get('member', {})
-        if not member_info:
-            # Fallback: try to find a member dict at the top level or in pageProps
-            if 'member' in member_data:
-                member_info = member_data['member']
-            elif 'pageProps' in member_data and 'member' in member_data['pageProps']:
-                member_info = member_data['pageProps']['member']
-            else:
-                # Try to find a dict with id and name keys
-                for v in member_data.values():
-                    if isinstance(v, dict) and 'id' in v and 'branding' in v:
-                        member_info = v
-                        break
-        rating = member_info.get('rating', {}) if member_info else {}
-        if not member_info or not member_info.get('id'):
-            logger.warning(f"Could not extract member info from: {json.dumps(member_data, ensure_ascii=False)[:500]}")
-            return {}
-        return {
-            'member_id': member_info.get('id'),
-            'name': member_info.get('branding', {}).get('name'),
-            'is_shop': member_info.get('is_shop'),
-            'has_membership': member_info.get('has_membership'),
-            'member_since': member_info.get('member_since'),
-            'posts_count': member_info.get('posts_count'),
-            'views_count': member_info.get('views_count'),
-            'followers_count': member_info.get('following', {}).get('followers_count'),
-            'following_count': member_info.get('following', {}).get('followings_count'),
-            'rating': {
-                'average': rating.get('average_rating'),
-                'count': rating.get('number_of_rating'),
-                'reviews_count': rating.get('number_of_reviews'),
-                'stats': rating.get('stats', {}),
-                'tags': rating.get('tags', []),
-            },
-            'verification_level': member_info.get('verification_level'),
-            'authorised_seller': member_info.get('authorised_seller'),
-            'avatar_uri': member_info.get('branding', {}).get('avatar'),
-            'extracted_at': self.timestamp,
-        }
-    
-    def extract_property_by_subcategory(self, listings: List[Dict]) -> Dict[str, List[Dict]]:
-        """
-        Group property listings by subcategory (cat2_label inside category field)
-        Returns dict with subcategory as key and list of properties as value
-        """
-        grouped = {}
-        for listing in listings:
-            cat2_label = (
-                listing.get('category', {}).get('cat2_label')
-                or 'unknown'
-            )
-            if cat2_label not in grouped:
-                grouped[cat2_label] = []
-            grouped[cat2_label].append(listing)
-        return grouped
-    
-    def prepare_properties_json(self, listings: List[Dict]) -> Dict[str, List[Dict]]:
-        """
-        Prepare properties data grouped by subcategory
-        Each property includes details and basic seller info
-        """
-        grouped_properties = self.extract_property_by_subcategory(listings)
-        result = {}
-        
-        for subcategory, properties in grouped_properties.items():
-            # Add s3_image_path to each property
-            for prop in properties:
-                prop['s3_image_path'] = self.build_s3_image_path(prop)
-            
-            result[subcategory] = {
-                'count': len(properties),
-                'scraped_at': self.timestamp,
-                'properties': properties,
-            }
-        
-        return result
-    
-    def prepare_members_json(self, member_data_list: List[Dict]) -> List[Dict]:
-        """
-        Prepare incremental member information JSON
-        Each entry represents unique member data with all rating information
-        """
-        unique_members = {}
-        
-        for member_data in member_data_list:
-            if not member_data:
-                continue
-            
-            member_id = member_data.get('member_id')
-            if not member_id:
-                continue
-            
-            # Store only if not already processed or if newer data
-            if member_id not in unique_members:
-                unique_members[member_id] = member_data
-        
-        # Convert to list and sort by member_id
-        members_list = sorted(
-            unique_members.values(),
-            key=lambda x: x.get('member_id', 0)
-        )
-        
-        return {
-            'count': len(members_list),
-            'scraped_at': self.timestamp,
-            'members': members_list,
-        }
-    
-    def save_properties_locally(self, properties_by_category: Dict) -> Tuple[str, int]:
-        """
-        Save properties data to local JSON file
-        Returns tuple of (file_path, total_properties)
-        """
-        filename = self.temp_dir / f"properties_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        total_props = sum(
-            len(cat_data.get('properties', []))
-            for cat_data in properties_by_category.values()
-        )
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(properties_by_category, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"Saved {total_props} properties to {filename}")
-        return str(filename), total_props
-    
-    def save_members_locally(self, members_data: Dict) -> Tuple[str, int]:
-        """
-        Save members/member information to local JSON file
-        Returns tuple of (file_path, total_members)
-        """
-        filename = self.temp_dir / f"members_info_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(members_data, f, ensure_ascii=False, indent=2)
-        
-        total_members = members_data.get('count', 0)
-        logger.info(f"Saved {total_members} members to {filename}")
-        return str(filename), total_members
-    
-    def process_listings(self, listings: List[Dict], member_details: Dict[int, Dict]) -> Tuple[Dict, Dict]:
-        """
-        Main processing function
-        Takes scraped listings and member details, returns structured data for upload
+        Check if an ad was posted yesterday (in the last 24 hours starting from yesterday)
         
         Args:
-            listings: List of property listings
-            member_details: Dict of member_id -> full member data
+            posted_at: Posted date string in Arabic (e.g., "قبل ساعة", "أمس", "قبل يوم")
         
         Returns:
-            Tuple of (properties_data, members_data)
+            True if ad was posted yesterday
         """
-        # Prepare properties by category
-        properties_data = self.prepare_properties_json(listings)
+        try:
+            # Check for "أمس" (yesterday)
+            if "أمس" in posted_at:
+                return True
+            
+            # Check for "يوم" (1 day ago)
+            if "قبل يوم" in posted_at or "قبل 1 يوم" in posted_at:
+                return True
+            
+            # Reject "أيام" (multiple days)
+            if re.search(r'قبل \d+ أيام', posted_at):
+                return False
+            
+            # Check for hours - accept if within 24 hours (yesterday's ads)
+            hour_match = re.search(r'قبل (\d+) ساع', posted_at)
+            if hour_match:
+                hours = int(hour_match.group(1))
+                # Accept ads posted within last 24-48 hours as "yesterday"
+                return 24 <= hours <= 48
+            
+            # Check for single hour: "قبل ساعة"
+            if "قبل ساعة" in posted_at:
+                return False  # Too recent
+            
+            # Check for minutes - reject (too recent)
+            if "دقيقة" in posted_at or "دقائق" in posted_at:
+                return False
+            
+            # Check for "الآن" (now)
+            if "الآن" in posted_at:
+                return False
+            
+            return False
+        except Exception as e:
+            logger.warning(f"Error parsing date '{posted_at}': {e}")
+            return False
+    
+    @staticmethod
+    def clean_listing_data(listing: Dict, s3_image_paths: List[str] = None) -> Dict:
+        """
+        Clean and normalize listing data
         
-        # Prepare member information
-        member_list = list(member_details.values())
-        members_data = self.prepare_members_json(member_list)
+        Args:
+            listing: Raw listing data
+            s3_image_paths: List of S3 paths for uploaded images
         
-        logger.info(f"Processing complete: {sum(cat['count'] for cat in properties_data.values())} properties, {members_data['count']} members")
+        Returns:
+            Cleaned listing data
+        """
+        return {
+            'listing_id': listing.get('listing_id'),
+            'title': listing.get('title'),
+            'description': listing.get('masked_description'),
+            'price': listing.get('price'),
+            'price_amount': listing.get('price_amount'),
+            'city': listing.get('city'),
+            'neighborhood': listing.get('neighborhood'),
+            'category': listing.get('category'),
+            'sub_category': listing.get('sub_category'),
+            'posted_date': listing.get('posted_date'),
+            'publish_date': listing.get('publish_date'),
+            'media': listing.get('media', []),
+            's3_image_paths': s3_image_paths or [],
+            'basic_info': listing.get('basic_info', []),
+            'post_url': listing.get('post_url'),
+            'member_id': listing.get('member_id'),
+            'has_video': listing.get('has_video'),
+            'has_360': listing.get('has_360'),
+            'services': listing.get('services', []),
+            'listing_status': listing.get('listing_status'),
+            'is_active': listing.get('is_active')
+        }
+    
+    @staticmethod
+    def clean_seller_data(seller: Dict) -> Dict:
+        """
+        Clean and normalize seller data
         
-        return properties_data, members_data
+        Args:
+            seller: Raw seller data
+        
+        Returns:
+            Cleaned seller data
+        """
+        return {
+            'id': seller.get('id'),
+            'full_name': seller.get('full_name'),
+            'profile_picture': seller.get('profile_picture'),
+            'member_since': seller.get('member_since'),
+            'rating_avg': seller.get('rating_avg'),
+            'number_of_ratings': seller.get('number_of_ratings'),
+            'response_time': seller.get('response_time'),
+            'is_shop': seller.get('is_shop'),
+            'member_link': seller.get('member_link'),
+            'verification_level': seller.get('verification_level')
+        }
 
 
-class DataValidator:
-    """Validates scraped and processed data"""
+class PropertiesDataManager:
+    """Manages scraped data and organizes it for S3 upload"""
     
-    @staticmethod
-    def validate_property(property_data: Dict) -> bool:
-        """Validate required fields in property data"""
-        required_fields = ['listing_id', 'title', 'price_amount', 'category']
-        
-        # Debug first property to see available fields
-        if not hasattr(DataValidator, '_debug_logged'):
-            logger.info(f"Sample property fields: {list(property_data.keys())[:15]}")
-            logger.info(f"Checking for: {required_fields}")
-            DataValidator._debug_logged = True
-        
-        return all(field in property_data for field in required_fields)
+    def __init__(self):
+        """Initialize data storage"""
+        self.subcategory_data = {}  # {category: {subcategory: [listings]}}
+        self.member_info = {}  # {member_id: member_data}
+        self.processor = PropertiesProcessor()
     
-    @staticmethod
-    def validate_member(member_data: Dict) -> bool:
-        """Validate required fields in member data"""
-        required_fields = ['member_id', 'name']
-        return all(field in member_data for field in required_fields)
-    
-    @staticmethod
-    def validate_listings(listings: List[Dict]) -> Tuple[int, int]:
+    def add_subcategory_data(self, category: str, subcategory: str, listings: List[Dict]):
         """
-        Validate all listings, return (valid_count, invalid_count)
+        Add listings for a subcategory
+        
+        Args:
+            category: Main category name
+            subcategory: Subcategory name
+            listings: List of listing data dicts (with s3_image_paths)
         """
-        valid = 0
-        invalid = 0
+        if category not in self.subcategory_data:
+            self.subcategory_data[category] = {}
         
-        for listing in listings:
-            if DataValidator.validate_property(listing):
-                valid += 1
-            else:
-                invalid += 1
-                logger.warning(f"Invalid property data: {listing.get('id', 'unknown')}")
+        if subcategory not in self.subcategory_data[category]:
+            self.subcategory_data[category][subcategory] = []
         
-        return valid, invalid
+        # Clean and add listings
+        for listing_data in listings:
+            s3_image_paths = listing_data.get('s3_image_paths', [])
+            cleaned_listing = self.processor.clean_listing_data(
+                listing_data.get('listing', {}),
+                s3_image_paths
+            )
+            cleaned_seller = self.processor.clean_seller_data(listing_data.get('seller', {}))
+            
+            self.subcategory_data[category][subcategory].append({
+                'listing': cleaned_listing,
+                'seller': cleaned_seller
+            })
+    
+    def add_member_info(self, member_id: int, member_data: Dict):
+        """
+        Add member information (incremental)
+        
+        Args:
+            member_id: Member ID
+            member_data: Member information dict
+        """
+        if member_id not in self.member_info:
+            self.member_info[member_id] = {
+                'id': member_id,
+                'name': member_data.get('branding', {}).get('name'),
+                'avatar': member_data.get('branding', {}).get('avatar'),
+                'posts_count': member_data.get('posts_count'),
+                'views_count': member_data.get('views_count'),
+                'member_since': member_data.get('member_since'),
+                'response_time': member_data.get('response_time'),
+                'rating': member_data.get('rating', {}),
+                'following': member_data.get('following', {}),
+                'verification_level': member_data.get('verification_level'),
+                'is_shop': member_data.get('is_shop'),
+                'mobile_number': member_data.get('mobile_number'),
+                'authorised_seller': member_data.get('authorised_seller')
+            }
+    
+    def get_subcategory_data(self) -> Dict:
+        """Get all subcategory data"""
+        return self.subcategory_data
+    
+    def get_member_info_list(self) -> List[Dict]:
+        """Get member info as a list"""
+        return list(self.member_info.values())
+    
+    def get_stats(self) -> Dict:
+        """Get scraping statistics"""
+        total_categories = len(self.subcategory_data)
+        total_subcategories = sum(len(subs) for subs in self.subcategory_data.values())
+        total_listings = sum(
+            len(listings) 
+            for category in self.subcategory_data.values()
+            for listings in category.values()
+        )
+        total_members = len(self.member_info)
+        
+        return {
+            'total_categories': total_categories,
+            'total_subcategories': total_subcategories,
+            'total_listings': total_listings,
+            'total_members': total_members
+        }

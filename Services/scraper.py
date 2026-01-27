@@ -47,7 +47,7 @@ class ServicesScraper:
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self.data_manager = ServicesDataManager()
-        self.target_date = (datetime.now() - timedelta(days=1)).date()  # Yesterday's date
+        self.target_date = datetime.now().date()  # Running date for S3 partitioning
         self.processor = ServicesProcessor()
 
     def fetch_page(self, url: str, retry_count: int = 0) -> Optional[str]:

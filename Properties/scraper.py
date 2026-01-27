@@ -1,486 +1,427 @@
 """
-OpenSooq Properties Scraper Module
-Scrapes property listings from OpenSooq website for yesterday's data only
+Main Scraper for OpenSooq Properties Category
+Fetches listings and detail pages from OpenSooq Kuwait
+Saves data to S3 with proper partitioning
 """
 
+import json
+import logging
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-import json
-from typing import List, Dict, Optional
-import logging
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
-import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+import os
+import time
 
-logging.basicConfig(level=logging.INFO)
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from utils import extract_json_from_html
+from .config import (
+    BASE_URL, PROPERTIES_URL, HEADERS,
+    REQUEST_TIMEOUT, LISTINGS_PER_PAGE, MAX_RETRIES, RETRY_DELAY
+)
+from .processor import PropertiesProcessor, PropertiesDataManager
+from .s3_uploader import PropertiesS3Uploader
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
 class PropertiesScraper:
-    """Scrapes property data from OpenSooq"""
+    """Main scraper class for Properties listings"""
     
-    BASE_URL = "https://kw.opensooq.com/ar"
-    
-    # Property category IDs for rental and sale
-    PROPERTY_CATEGORIES = {
-        "property-for-rent": "عقارات/عقارات-للإيجار",
-        "property-for-sale": "عقارات/عقارات-للبيع"
-    }
-    
-    # Subcategory mappings (id -> url_name)
-    RENT_SUBCATEGORIES = {
-        8001: "عقارات/شقق-للايجار",  # Apartments for Rent
-        12447: "عقارات/شقق-وأجنحة-فندقية-للايجار",  # Hotel Apartments
-        12487: "عقارات/غرف-وسكن-مشترك-للايجار",  # Shared Rooms
-        8003: "عقارات/فلل-وقصور-للايجار",  # Villas/Palaces
-        12696: "عقارات/بيوت-ومنازل-للايجار",  # Townhouses
-        8009: "عقارات/عمارة-سكنية-للايجار",  # Whole Building
-        12813: "عقارات/أراضي-للايجار",  # Lands
-        12893: "عقارات/مزارع-وشاليهات-للايجار",  # Farms & Chalets
-        16735: "عقارات/مكاتب-للايجار",  # Offices
-        16775: "عقارات/محلات-للايجار",  # Shops
-        16815: "عقارات/معارض-للايجار",  # Showrooms
-        16855: "عقارات/مخازن-للايجار",  # Warehouses
-        16895: "عقارات/طابق-كامل-للايجار",  # Full Floors
-        16935: "عقارات/مجمعات-للايجار",  # Complexes
-        16975: "عقارات/فلل-تجارية-للايجار",  # Commercial Villas
-        17015: "عقارات/مطاعم-وكافيهات-للايجار",  # Restaurants & Cafes
-        17055: "عقارات/سوبرماركت-للايجار",  # Supermarkets
-        17095: "عقارات/عيادات-للايجار",  # Clinics
-        17135: "عقارات/مصانع-للايجار",  # Factories
-        17175: "عقارات/سكن-موظفين-للايجار",  # Staff Housing
-        17215: "عقارات/فنادق-للايجار",  # Hotels
-        11339: "عقارات/عقارات-أجنبية-للايجار",  # Foreign Properties
-    }
-    
-    SALE_SUBCATEGORIES = {
-        7683: "عقارات/شقق-للبيع",  # Apartments for Sale
-        7685: "عقارات/فلل-وقصور-للبيع",  # Villas/Palaces
-        12658: "عقارات/أراضي-للبيع",  # Lands
-        12853: "عقارات/بيوت-ومنازل-للبيع",  # Townhouses
-        12933: "عقارات/عمارات-للبيع",  # Buildings
-        7689: "عقارات/عقارات-تجارية-للبيع",  # Commercial Properties
-        16215: "عقارات/مكاتب-للبيع",  # Offices
-        16255: "عقارات/محلات-للبيع",  # Shops
-        16295: "عقارات/معارض-للبيع",  # Showrooms
-        16335: "عقارات/مخازن-للبيع",  # Warehouses
-        16375: "عقارات/طابق-كامل-للبيع",  # Full Floors
-        16415: "عقارات/مجمعات-للبيع",  # Complexes
-        16455: "عقارات/فلل-تجارية-للبيع",  # Commercial Villas
-        16495: "عقارات/مطاعم-وكافيهات-للبيع",  # Restaurants & Cafes
-        16535: "عقارات/سوبرماركت-للبيع",  # Supermarkets
-        16575: "عقارات/عيادات-للبيع",  # Clinics
-        16615: "عقارات/مصانع-للبيع",  # Factories
-        16655: "عقارات/بنوك-للبيع",  # Banks
-        16695: "عقارات/فنادق-للبيع",  # Hotels
-        11337: "عقارات/عقارات-أجنبية-للبيع",  # Foreign Properties
-    }
-    
-    def __init__(self):
-        """Initialize scraper with requests session"""
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        self.yesterday = (datetime.now() - timedelta(days=1)).date()
-        self.images_dir = Path("/tmp/opensooq_images")
-        self.images_dir.mkdir(exist_ok=True, parents=True)
-    
-    def download_image(self, image_url: str, save_path: str) -> bool:
+    def __init__(self, s3_uploader: PropertiesS3Uploader):
         """
-        Download a single image from URL to local path
-        Returns True if successful, False otherwise
-        """
-        try:
-            response = self.session.get(image_url, timeout=10)
-            response.raise_for_status()
-            
-            # Ensure directory exists
-            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(save_path, 'wb') as f:
-                f.write(response.content)
-            
-            logger.debug(f"Downloaded image to {save_path}")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to download image {image_url}: {str(e)}")
-            return False
-    
-    def download_listing_images(self, listing_id: int, listing_detail: Dict = None, listing: Dict = None) -> Dict[str, str]:
-        """
-        Download all images for a listing
-        Returns dict mapping image filenames to their local paths
+        Initialize scraper
         
         Args:
-            listing_id: OpenSooq listing ID
-            listing_detail: Listing detail data from fetch_listing_detail (optional)
-            listing: Original listing data (optional, fallback)
+            s3_uploader: S3Uploader instance for uploading data
+        """
+        self.s3_uploader = s3_uploader
+        self.session = requests.Session()
+        self.session.headers.update(HEADERS)
+        self.data_manager = PropertiesDataManager()
+        self.target_date = datetime.now().date()  # Running date for S3 partitioning
+        self.processor = PropertiesProcessor()
+
+    def fetch_page(self, url: str, retry_count: int = 0) -> Optional[str]:
+        """
+        Fetch a page and return HTML content
+        
+        Args:
+            url: URL to fetch
+            retry_count: Current retry attempt
         
         Returns:
-            Dict of {image_filename: local_path}
-        """
-        downloaded_images = {}
-        
-        try:
-            logger.info(f"Attempting to download images for listing {listing_id}")
-            
-            # Navigate through the listing detail structure to find images
-            images_data = []
-            
-            # Log what we received
-            if listing_detail is None:
-                logger.warning(f"listing_detail is None for listing {listing_id}")
-            elif not isinstance(listing_detail, dict):
-                logger.warning(f"listing_detail is not a dict for listing {listing_id}, type: {type(listing_detail)}")
-            else:
-                logger.info(f"listing_detail keys for {listing_id}: {list(listing_detail.keys())}")
-            
-            # Try multiple possible paths where images might be stored
-            if listing_detail and isinstance(listing_detail, dict):
-                # NEW: Check postData.listing.media (the actual structure)
-                if 'postData' in listing_detail:
-                    post_data = listing_detail['postData']
-                    if isinstance(post_data, dict) and 'listing' in post_data:
-                        listing_obj = post_data['listing']
-                        if isinstance(listing_obj, dict) and 'media' in listing_obj:
-                            images_data = listing_obj['media']
-                            logger.info(f"✓ Found images in postData['listing']['media']: {len(images_data)} items")
-                
-                # Fallback paths
-                if not images_data and 'listing' in listing_detail and isinstance(listing_detail['listing'], dict):
-                    if 'images' in listing_detail['listing']:
-                        images_data = listing_detail['listing']['images']
-                        logger.info(f"✓ Found images in listing_detail['listing']['images']: {len(images_data)} items")
-                if not images_data and 'images' in listing_detail:
-                    images_data = listing_detail['images']
-                    logger.info(f"✓ Found images in listing_detail['images']: {len(images_data)} items")
-                if not images_data and 'serpApiResponse' in listing_detail:
-                    api_response = listing_detail['serpApiResponse']
-                    if isinstance(api_response, dict) and 'images' in api_response:
-                        images_data = api_response['images']
-                        logger.info(f"✓ Found images in listing_detail['serpApiResponse']['images']: {len(images_data)} items")
-            
-            # Fallback to original listing if available and no images found
-            if not images_data and listing and isinstance(listing, dict):
-                logger.info(f"Checking original listing for images, keys: {list(listing.keys())}")
-                if 'images' in listing:
-                    images_data = listing.get('images', [])
-                    logger.info(f"✓ Found images in listing['images']: {len(images_data)} items")
-                elif 'image_urls' in listing:
-                    images_data = listing.get('image_urls', [])
-                    logger.info(f"✓ Found images in listing['image_urls']: {len(images_data)} items")
-            
-            if not images_data:
-                logger.warning(f"✗ No images found for listing {listing_id} - checked all possible locations")
-                # Log sample of what was in listing_detail for debugging
-                if listing_detail and isinstance(listing_detail, dict):
-                    logger.info(f"  Available top-level keys: {list(listing_detail.keys())}")
-                    if 'listing' in listing_detail:
-                        logger.info(f"  Keys in listing_detail['listing']: {list(listing_detail['listing'].keys()) if isinstance(listing_detail['listing'], dict) else 'not a dict'}")
-                return {}
-            
-            # Create listing-specific directory
-            listing_images_dir = self.images_dir / f"{listing_id}"
-            listing_images_dir.mkdir(exist_ok=True, parents=True)
-            
-            logger.info(f"Found {len(images_data)} images for listing {listing_id}")
-            
-            # Log sample of first image to understand structure
-            if images_data:
-                logger.info(f"  Sample image data type: {type(images_data[0])}")
-                if isinstance(images_data[0], dict):
-                    logger.info(f"  Sample image keys: {list(images_data[0].keys())}")
-            
-            # Download each image
-            for idx, image_info in enumerate(images_data, 1):
-                if isinstance(image_info, dict):
-                    # Get image URI and convert to full URL
-                    image_uri = image_info.get('uri')
-                    
-                    # Try multiple keys where image URL might be
-                    image_url = (image_uri or
-                                image_info.get('original') or 
-                                image_info.get('full') or 
-                                image_info.get('url') or
-                                image_info.get('src') or
-                                image_info.get('image_url'))
-                    
-                    # If we found a URI (relative path), convert to full URL
-                    if image_uri and not image_url.startswith('http'):
-                        # OpenSooq CDN URL format: https://opensooq-images.os-cdn.com/previews/0x720/{uri}.webp
-                        image_url = f"https://opensooq-images.os-cdn.com/previews/0x720/{image_uri}.webp"
-                        logger.debug(f"Converted URI to full URL: {image_url}")
-                    
-                    if not image_url:
-                        logger.info(f"  Image {idx} has no URL key - available keys: {list(image_info.keys())}")
-                else:
-                    image_url = str(image_info)
-                
-                if not image_url:
-                    logger.warning(f"No URL found for image {idx} in listing {listing_id}")
-                    continue
-                
-                # Generate filename
-                file_ext = '.jpg'  # Default extension
-                if '.' in image_url.split('/')[-1]:
-                    file_ext = '.' + image_url.split('.')[-1].split('?')[0]
-                
-                filename = f"image_{idx:03d}{file_ext}"
-                save_path = listing_images_dir / filename
-                
-                if self.download_image(image_url, str(save_path)):
-                    downloaded_images[filename] = str(save_path)
-            
-            logger.info(f"Downloaded {len(downloaded_images)} images for listing {listing_id}")
-            
-        except Exception as e:
-            logger.error(f"Error downloading images for listing {listing_id}: {str(e)}", exc_info=True)
-        
-        return downloaded_images
-    
-    def is_yesterday_posting(self, posted_at_text: str) -> bool:
-        """
-        Check if posting is from yesterday based on posted_at text
-        Expected formats: "قبل X ساعة", "قبل X دقيقة", "أمس", etc.
-        """
-        if not posted_at_text:
-            return False
-        
-        posted_at = posted_at_text.lower().strip()
-        
-        # Check for yesterday indicator
-        if "أمس" in posted_at:
-            return True
-        
-        # If posted less than 24 hours ago, assume it could be yesterday
-        # This is approximate - we also check against inserted_date in the data
-        return False
-    
-    def is_yesterday_by_date(self, date_str: str) -> bool:
-        """
-        Check if date string matches yesterday's date
-        Expected format: "2026-01-14" or "14-01-2026"
-        """
-        if not date_str:
-            return False
-        
-        try:
-            # Try format YYYY-MM-DD
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
-            if date_obj == self.yesterday:
-                return True
-            
-            # Try format DD-MM-YYYY
-            date_obj = datetime.strptime(date_str, "%d-%m-%Y").date()
-            return date_obj == self.yesterday
-        except ValueError:
-            return False
-    
-    def fetch_category_page(self, category_url: str, page: int = 1) -> Optional[Dict]:
-        """
-        Fetch category page and extract listings from API response in pageProps
+            HTML content or None if failed
         """
         try:
-            url = f"{self.BASE_URL}/{category_url}"
-            if page > 1:
-                url += f"?page={page}"
-            
             logger.info(f"Fetching: {url}")
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
-            
-            # Parse HTML to extract JSON from __NEXT_DATA__
-            soup = BeautifulSoup(response.content, 'html.parser')
-            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-            
-            if script_tag:
-                data = json.loads(script_tag.string)
-                return data.get('props', {}).get('pageProps', {})
-            
-            return None
+            return response.text
         except Exception as e:
-            logger.error(f"Error fetching {url}: {str(e)}")
+            if retry_count < MAX_RETRIES:
+                logger.warning(f"Error fetching {url}: {e}. Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+                return self.fetch_page(url, retry_count + 1)
+            logger.error(f"Error fetching {url} after {MAX_RETRIES} retries: {e}")
             return None
-    
-    def fetch_listing_detail(self, listing_id: int) -> Optional[Dict]:
+
+    def get_main_categories(self) -> List[Dict]:
         """
-        Fetch detailed listing data including full member info
+        Get main property categories from the Properties main page
+        
+        Returns:
+            List of main categories with details
         """
+        html = self.fetch_page(PROPERTIES_URL)
+        if not html:
+            logger.error("Failed to fetch main Properties page")
+            return []
+        
         try:
-            url = f"{self.BASE_URL}/search/{listing_id}"
-            logger.info(f"Fetching listing detail: {url}")
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
+                logger.error("Failed to extract JSON from Properties page")
+                return []
             
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
+            # Extract categories from facets
+            facets = page_props.get('serpApiResponse', {}).get('facets', {})
+            categories = facets.get('items', [])
             
-            soup = BeautifulSoup(response.content, 'html.parser')
-            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-            
-            if script_tag:
-                data = json.loads(script_tag.string)
-                return data.get('props', {}).get('pageProps', {})
-            
-            return None
+            logger.info(f"Found {len(categories)} main property categories")
+            return categories
         except Exception as e:
-            logger.error(f"Error fetching listing {listing_id}: {str(e)}")
-            return None
-    
-    def fetch_member_profile(self, member_link: str) -> Optional[Dict]:
+            logger.error(f"Error parsing main categories: {e}")
+            return []
+
+    def get_subcategories(self, category_url: str, category_label: str) -> List[Dict]:
         """
-        Fetch member profile page with all rating info using the full member_link path
-        """
-        try:
-            # member_link is a full path like '/ar/mid/member-152681542881'
-            url = f"https://kw.opensooq.com{member_link}"
-            logger.info(f"Fetching member profile: {url}")
-
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-
-            soup = BeautifulSoup(response.content, 'html.parser')
-            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-
-            if script_tag:
-                data = json.loads(script_tag.string)
-                return data.get('props', {}).get('pageProps', {})
-
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching member {member_link}: {str(e)}")
-            return None
-    
-    def scrape_category(self, category_type: str, category_url: str) -> List[Dict]:
-        """
-        Scrape all listings from a category, filtering for yesterday's posts only.
-        Returns list of processed listing dictionaries with details and seller info.
-        """
-        all_listings = []
-        page = 1
-        max_pages = 100  # Safety limit
-
-        while page <= max_pages:
-            page_data = self.fetch_category_page(category_url, page)
-
-            if not page_data or 'serpApiResponse' not in page_data:
-                logger.warning(f"No data found for {category_url} page {page}")
-                break
-
-            listings = page_data['serpApiResponse'].get('listings', {}).get('items', [])
-
-            if not listings:
-                logger.info(f"No listings on page {page}")
-                break
-
-            # Filter for yesterday's listings and process them
-            for listing in listings:
-                if self.is_yesterday_by_date(listing.get('inserted_date', '')):
-                    listing_id = listing.get('id')
-                    logger.debug(f"Processing listing {listing_id} from list endpoint")
-                    
-                    # Fetch detail page to get complete listing object with media, basic_info, etc.
-                    listing_detail = self.fetch_listing_detail(listing_id)
-                    
-                    # Extract the complete listing object from detail page
-                    listing['category_type'] = category_type
-                    processed = self.extract_property_details(listing, listing_detail)
-                    all_listings.append(processed)
-
-            # Check pagination
-            meta = page_data['serpApiResponse'].get('listings', {}).get('meta', {})
-            total_pages = meta.get('pages', 1)
-            current_page = meta.get('current_page', 1)
-
-            if current_page >= total_pages:
-                break
-
-            page += 1
-
-        logger.info(f"Found {len(all_listings)} listings from {category_type}")
-        return all_listings
-    
-    def get_seller_info(self, listing: Dict) -> Dict:
-        """Extract seller/member basic info from listing, including member_link for profile fetching"""
-        return {
-            'member_id': listing.get('member_id'),
-            'member_display_name': listing.get('member_display_name'),
-            'member_user_name': listing.get('member_user_name'),
-            'member_avatar_uri': listing.get('member_avatar_uri'),
-            'member_rating_avg': listing.get('member_rating_avg'),
-            'member_rating_count': listing.get('member_rating_count'),
-            'member_link': listing.get('member_link'),
-        }
-    
-    def extract_property_details(self, listing: Dict, listing_detail: Dict = None) -> Dict:
-        """
-        Extract complete listing object from detail page.
-        Falls back to list endpoint data if detail page not available.
-        Normalizes category structure for consistent processing.
+        Get subcategories for a main category
         
         Args:
-            listing: Basic listing from list endpoint
-            listing_detail: Complete listing detail from detail page (contains postData.listing)
+            category_url: URL path of main category
+            category_label: Label of main category
+        
+        Returns:
+            List of subcategories with details
         """
-        # Try to get complete listing object from detail page first
-        if listing_detail and isinstance(listing_detail, dict):
-            # Extract the complete listing object from postData.listing
-            post_data = listing_detail.get('postData', {})
-            if isinstance(post_data, dict) and 'listing' in post_data:
-                complete_listing = post_data['listing']
-                if isinstance(complete_listing, dict):
-                    logger.debug(f"Using complete listing object from detail page")
-                    # Add list endpoint data as fallback
-                    complete_listing['_list_data'] = listing
-                    complete_listing['category_type'] = listing.get('category_type')
-                    
-                    # Ensure listing_id is set
-                    if 'listing_id' not in complete_listing and 'id' not in complete_listing:
-                        complete_listing['listing_id'] = listing.get('id')
-                    
-                    # Normalize category structure from detail page to processor format
-                    # Detail page has: category{label, reporting_name, ...} and sub_category{label, ...}
-                    # Processor expects: category{cat1_label, cat2_label, ...}
-                    if isinstance(complete_listing.get('category'), dict):
-                        category = complete_listing['category']
-                        sub_category = complete_listing.get('sub_category', {})
-                        
-                        # Build normalized category object
-                        complete_listing['category'] = {
-                            'cat1_code': category.get('reporting_name') or listing.get('cat1_code'),
-                            'cat1_label': category.get('label') or listing.get('cat1_label', 'unknown'),
-                            'cat2_code': sub_category.get('reporting_name') or listing.get('cat2_code'),
-                            'cat2_label': sub_category.get('label') or listing.get('cat2_label', 'unknown'),
-                        }
-                    
-                    return complete_listing
+        # Build full URL
+        full_url = f"{BASE_URL}/{category_url}"
+        html = self.fetch_page(full_url)
         
-        # Fallback: Use list endpoint data and normalize it
-        property_data = dict(listing)
+        if not html:
+            logger.error(f"Failed to fetch subcategories for {category_label}")
+            return []
         
-        # Ensure listing_id exists
-        if 'id' in property_data and 'listing_id' not in property_data:
-            property_data['listing_id'] = property_data['id']
+        try:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
+                logger.error(f"Failed to extract JSON from {category_label}")
+                return []
+            
+            # Extract subcategories from facets
+            facets = page_props.get('serpApiResponse', {}).get('facets', {})
+            subcategories = facets.get('items', [])
+            
+            logger.info(f"Found {len(subcategories)} subcategories for {category_label}")
+            return subcategories
+        except Exception as e:
+            logger.error(f"Error parsing subcategories for {category_label}: {e}")
+            return []
+
+    def get_listings_page(self, subcategory_url: str, page: int = 1) -> Tuple[List[Dict], Dict]:
+        """
+        Get listings for a subcategory page
         
-        # Ensure required fields
-        if 'title' not in property_data:
-            property_data['title'] = 'Untitled'
+        Args:
+            subcategory_url: URL path of subcategory
+            page: Page number
         
-        if 'price_amount' not in property_data:
-            property_data['price_amount'] = 0
+        Returns:
+            Tuple of (listings list, metadata dict)
+        """
+        # Build URL with page parameter if needed
+        if page > 1:
+            full_url = f"{BASE_URL}/{subcategory_url}?page={page}"
+        else:
+            full_url = f"{BASE_URL}/{subcategory_url}"
         
-        # Build category object
-        if 'category' not in property_data:
-            property_data['category'] = {
-                'cat1_code': property_data.get('cat1_code'),
-                'cat1_label': property_data.get('cat1_label', 'unknown'),
-                'cat2_code': property_data.get('cat2_code'),
-                'cat2_label': property_data.get('cat2_label', 'unknown'),
+        html = self.fetch_page(full_url)
+        if not html:
+            return [], {}
+        
+        try:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
+                return [], {}
+            
+            # Extract listings
+            serp_data = page_props.get('serpApiResponse', {})
+            listings_data = serp_data.get('listings', {})
+            listings = listings_data.get('items', [])
+            metadata = listings_data.get('meta', {})
+            
+            logger.info(f"Found {len(listings)} listings on page {page}")
+            return listings, metadata
+        except Exception as e:
+            logger.error(f"Error parsing listings: {e}")
+            return [], {}
+
+    def get_listing_detail(self, listing_id: int) -> Optional[Dict]:
+        """
+        Get detailed information for a specific listing
+        
+        Args:
+            listing_id: Listing ID
+        
+        Returns:
+            Dict with listing and seller data, or None if failed
+        """
+        detail_url = f"{BASE_URL}/search/{listing_id}"
+        html = self.fetch_page(detail_url)
+        
+        if not html:
+            return None
+        
+        try:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
+                return None
+            
+            # Extract post data
+            post_data = page_props.get('postData', {})
+            
+            return {
+                'listing': post_data.get('listing', {}),
+                'seller': post_data.get('seller', {})
             }
+        except Exception as e:
+            logger.error(f"Error parsing listing detail {listing_id}: {e}")
+            return None
+
+    def get_member_info(self, member_link: str) -> Optional[Dict]:
+        """
+        Get detailed member information
         
-        # Add metadata fields
-        property_data['local_images_dir'] = None
-        property_data['s3_image_path'] = None
-        property_data['seller_info'] = self.get_seller_info(listing)
+        Args:
+            member_link: Member profile URL path
         
-        return property_data
+        Returns:
+            Dict with member info, or None if failed
+        """
+        # Build full URL - member_link already contains /ar/ prefix
+        # member_link format: /ar/mid/member-xxxxx
+        if member_link.startswith('/ar/'):
+            # Remove /ar/ prefix since BASE_URL already includes it
+            member_link = member_link[3:]  # Remove '/ar'
+        
+        full_url = f"{BASE_URL}{member_link}"
+        html = self.fetch_page(full_url)
+        
+        if not html:
+            return None
+        
+        try:
+            page_props = extract_json_from_html(html, 'pageProps')
+            if not page_props:
+                return None
+            
+            # Extract member info
+            user_info = page_props.get('userInfo', {})
+            member_data = user_info.get('member', {})
+            
+            return member_data
+        except Exception as e:
+            logger.error(f"Error parsing member info {member_link}: {e}")
+            return None
+
+    def scrape_subcategory(self, category_label: str, subcategory: Dict) -> int:
+        """
+        Scrape all yesterday's listings from a subcategory
+        
+        Args:
+            category_label: Main category label
+            subcategory: Subcategory data dict
+        
+        Returns:
+            Number of listings scraped
+        """
+        subcategory_url = subcategory.get('url_ar', '')
+        subcategory_label = subcategory.get('label', '')
+        
+        logger.info(f"Scraping subcategory: {category_label} -> {subcategory_label}")
+        
+        # Get first page to check metadata
+        listings, metadata = self.get_listings_page(subcategory_url, page=1)
+        
+        total_pages = metadata.get('pages', 1)
+        total_count = metadata.get('count', 0)
+        
+        logger.info(f"Total listings: {total_count}, Total pages: {total_pages}")
+        
+        all_listings = []
+        
+        # Scrape all pages
+        for page in range(1, total_pages + 1):
+            if page > 1:
+                listings, _ = self.get_listings_page(subcategory_url, page)
+            
+            for listing in listings:
+                # Check if posted yesterday
+                posted_at = listing.get('posted_at', '')
+                if not self.processor.is_yesterday_ad(posted_at):
+                    logger.debug(f"Skipping listing {listing.get('id')} - not from yesterday")
+                    continue
+                
+                # Get detail page
+                listing_id = listing.get('id')
+                detail_data = self.get_listing_detail(listing_id)
+                
+                if detail_data:
+                    # Download images
+                    s3_image_paths = []
+                    media = detail_data.get('listing', {}).get('media', [])
+                    
+                    for idx, media_item in enumerate(media):
+                        if media_item.get('mime_type', '').startswith('image/'):
+                            image_uri = media_item.get('uri', '')
+                            if image_uri:
+                                s3_path = self.s3_uploader.upload_image(
+                                    image_url=image_uri,
+                                    category=category_label,
+                                    subcategory=subcategory_label,
+                                    target_date=self.target_date,
+                                    listing_id=listing_id,
+                                    image_index=idx
+                                )
+                                if s3_path:
+                                    s3_image_paths.append(s3_path)
+                    
+                    # Add s3_image_paths to detail data
+                    detail_data['s3_image_paths'] = s3_image_paths
+                    
+                    # Add to collection
+                    all_listings.append(detail_data)
+                    
+                    # Process member info
+                    seller = detail_data.get('seller', {})
+                    member_link = seller.get('member_link', '')
+                    member_id = seller.get('id')
+                    
+                    if member_link and member_id:
+                        # Get member info
+                        member_info = self.get_member_info(member_link)
+                        if member_info:
+                            # Add to data manager for incremental storage
+                            self.data_manager.add_member_info(member_id, member_info)
+                
+                # Rate limiting
+                time.sleep(0.5)
+        
+        # Save subcategory data
+        if all_listings:
+            self.data_manager.add_subcategory_data(category_label, subcategory_label, all_listings)
+            logger.info(f"Scraped {len(all_listings)} yesterday's listings for {subcategory_label}")
+        
+        return len(all_listings)
+
+    def scrape_category(self, category: Dict) -> int:
+        """
+        Scrape all subcategories of a main category
+        
+        Args:
+            category: Main category data dict
+        
+        Returns:
+            Total number of listings scraped
+        """
+        category_label = category.get('label', '')
+        category_url = category.get('url_ar', '')
+        
+        logger.info(f"Scraping main category: {category_label}")
+        
+        # Get subcategories
+        subcategories = self.get_subcategories(category_url, category_label)
+        
+        total_listings = 0
+        
+        for subcategory in subcategories:
+            count = self.scrape_subcategory(category_label, subcategory)
+            total_listings += count
+        
+        return total_listings
+
+    def scrape_all_properties(self):
+        """
+        Main method to scrape all property categories
+        """
+        logger.info(f"Starting Properties scrape for date: {self.target_date}")
+        
+        # Get all main categories
+        categories = self.get_main_categories()
+        
+        if not categories:
+            logger.error("No categories found. Exiting.")
+            return
+        
+        total_listings = 0
+        
+        # Scrape each category
+        for category in categories:
+            try:
+                count = self.scrape_category(category)
+                total_listings += count
+            except Exception as e:
+                logger.error(f"Error scraping category {category.get('label')}: {e}")
+                continue
+        
+        # Upload to S3
+        logger.info(f"Total listings scraped: {total_listings}")
+        logger.info("Uploading data to S3...")
+        
+        try:
+            self.s3_uploader.upload_all_data(
+                self.data_manager,
+                self.target_date
+            )
+            logger.info("Successfully uploaded all data to S3")
+        except Exception as e:
+            logger.error(f"Error uploading to S3: {e}")
+            raise
+
+
+def main():
+    """Main entry point for the scraper"""
+    # Get credentials from environment
+    bucket_name = os.getenv('S3_BUCKET_NAME', 'opensooq-data')
+    aws_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+    aws_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+    aws_region = os.getenv('AWS_REGION', 'us-east-1')
+    
+    if not aws_access_key or not aws_secret_key:
+        logger.error("AWS credentials not found in environment variables")
+        sys.exit(1)
+    
+    # Initialize S3 uploader
+    s3_uploader = PropertiesS3Uploader(
+        bucket_name=bucket_name,
+        aws_access_key=aws_access_key,
+        aws_secret_key=aws_secret_key,
+        region=aws_region
+    )
+    
+    # Initialize and run scraper
+    scraper = PropertiesScraper(s3_uploader)
+    scraper.scrape_all_properties()
+
+
+if __name__ == "__main__":
+    main()
